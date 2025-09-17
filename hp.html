@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>HP Insults Extractor</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 20px;
+    }
+    #progress {
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+    pre {
+      background: #f4f4f4;
+      padding: 10px;
+      border-radius: 6px;
+      max-height: 400px;
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>Harry Potter Insults Extractor</h1>
+  <div id="progress">Waiting to start...</div>
+  <button id="startBtn">Start Extraction</button>
+  <pre id="output"></pre>
+
+  <script type="module">
+    const API_KEY = ""; // ⚠️ Replace with your key
+
+    const chaptersPerBook = {
+      1: 17,
+      2: 18,
+      3: 22,
+      4: 37,
+      5: 38,
+      6: 30,
+      7: 36
+    };
+
+    async function makeApiCall(book, chapter) {
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Request timeout after 30 seconds')), 30000);
+      });
+
+      const apiCallPromise = async () => {
+        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${API_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "gpt-4.1",
+            messages: [
+              {
+                role: "system",
+                content: `
+You are an expert on Harry Potter books.
+For the specified book and chapter you need to state ALL remarks  and comments made by characters:
+- Read the entire chapter line by line, ensuring no dialogue or character thought is skipped.
+- Include remarks or comments made by any character in the chapter, not just the main or present ones.
+- Include remarks or comment made on any kind of group of people or animals, for instance family, musicians, gingers, irish, cats....
+- Include remarks or comment made behind the back where the subject wasn't present.
+- Do not include remarks stated by the narrator.
+- Use a checklist of all characters appearing in the chapter to verify that no character's remarks are missed.
+- Output strictly as JSON.
+- Keep the descriptions short.
+                `
+              },
+              {
+                role: "user",
+                content: `Extract ALL remarks and comments made by any character from book ${book}, chapter ${chapter}.`
+              }
+            ],
+            temperature: 0,
+            response_format: {
+              type: "json_schema",
+              json_schema: {
+                  name: "remarks_schema",
+                  strict: true,
+                  schema: {
+                      type: "object",
+                      properties: {
+                          book: {
+                              type: "integer",
+                          },
+                          chapter: {
+                              type: "integer",
+                          },
+                          remarks: {
+                              type: "array",
+                              description: "A list of ALL remarks or comments stated by any character.",
+                              items: {
+                                  type: "object",
+                                  properties: {
+                                      character_name: {
+                                          type: "string",
+                                          description: "The character who said the remark.",
+                                      },
+                                      target: {
+                                          type: "string",
+                                          description: "The character or group who was the subject of the remark.",
+                                      },
+                                      sentiment: {
+                                          type: "string",
+                                          enum: ["negative", "positive", "neutral"],
+                                          description:
+                                              "The overall sentiment of the remark: negative (insult), positive (sarcastic or disguised compliment), or neutral (non-insulting or unclear).",
+                                      },
+                                  },
+                                  required: ["character_name", "sentiment", "target"],
+                                  additionalProperties: false,
+                              },
+                          },
+                      },
+                      required: ["book", "chapter", "remarks"],
+                      additionalProperties: false,
+                  },
+
+              }
+            }
+          })
+        });
+
+        const completion = await response.json();
+
+        try {
+          const parsed = JSON.parse(completion.choices[0].message.content);
+          return { success: true, data: parsed, book, chapter };
+        } catch (err) {
+          console.error(`Failed to parse JSON for book ${book}, chapter ${chapter}:`, err);
+          return { success: false, error: `Parse error: ${err.message}`, book, chapter };
+        }
+      };
+
+      try {
+        return await Promise.race([apiCallPromise(), timeoutPromise]);
+      } catch (err) {
+        console.error(`API call failed for book ${book}, chapter ${chapter}:`, err);
+        return { success: false, error: err.message, book, chapter };
+      }
+    }
+
+    async function extractInsults(updateProgress) {
+      // Create array of specific failed chapter requests to retry
+      const failedChaptersToRetry = {
+        3: [4],
+        4: [34, 35]
+      };
+
+      const allChapterRequests = [];
+      Object.entries(failedChaptersToRetry).forEach(([book, chapters]) => {
+        chapters.forEach(chapter => {
+          allChapterRequests.push({ book: parseInt(book), chapter });
+        });
+      });
+
+      const totalChapters = allChapterRequests.length;
+      let completedChapters = 0;
+      let allResults = [];
+      let failedChapters = [];
+
+      // Process in batches of 2
+      const batchSize = 10;
+      for (let i = 0; i < allChapterRequests.length; i += batchSize) {
+        const batch = allChapterRequests.slice(i, i + batchSize);
+        const batchNumber = Math.floor(i / batchSize) + 1;
+        const totalBatches = Math.ceil(allChapterRequests.length / batchSize);
+
+        updateProgress(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} chapters)...`);
+
+        // Execute batch concurrently
+        const batchPromises = batch.map(({ book, chapter }) => makeApiCall(book, chapter));
+        const batchResults = await Promise.allSettled(batchPromises);
+
+        // Process batch results
+        batchResults.forEach((result, index) => {
+          completedChapters++;
+          const { book, chapter } = batch[index];
+
+          if (result.status === 'fulfilled' && result.value.success) {
+            allResults.push(result.value.data);
+          } else {
+            const errorMessage = result.status === 'fulfilled'
+              ? result.value.error
+              : result.reason?.message || 'Unknown error';
+            failedChapters.push({ book, chapter, error: errorMessage });
+            console.error(`Failed to process book ${book}, chapter ${chapter}: ${errorMessage}`);
+          }
+        });
+
+        updateProgress(`Completed ${completedChapters}/${totalChapters} chapters...`);
+
+        // Small delay between batches to be respectful to the API
+        if (i + batchSize < allChapterRequests.length) {
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+
+      // Group failed chapters by book for summary
+      const failedByBook = {};
+      failedChapters.forEach(({ book, chapter, error }) => {
+        if (!failedByBook[book]) {
+          failedByBook[book] = [];
+        }
+        failedByBook[book].push({ chapter, error });
+      });
+
+      return {
+        results: allResults,
+        failed: failedByBook,
+        totalFailed: failedChapters.length,
+        totalSuccess: allResults.length
+      };
+    }
+
+    document.getElementById("startBtn").addEventListener("click", async () => {
+      const progressEl = document.getElementById("progress");
+      const outputEl = document.getElementById("output");
+
+      progressEl.textContent = "Starting extraction...";
+
+      const extractionResults = await extractInsults(msg => {
+        progressEl.textContent = msg;
+      });
+
+      // Create summary message
+      let summary = `Done! Successfully processed ${extractionResults.totalSuccess} chapters.`;
+      if (extractionResults.totalFailed > 0) {
+        summary += ` ${extractionResults.totalFailed} chapters failed.`;
+      }
+      progressEl.textContent = summary;
+
+      // Prepare output with results and failed chapters summary
+      let output = {
+        successful_chapters: extractionResults.results,
+        summary: {
+          total_chapters: extractionResults.totalSuccess + extractionResults.totalFailed,
+          successful: extractionResults.totalSuccess,
+          failed: extractionResults.totalFailed
+        }
+      };
+
+      // Add failed chapters summary if there are any failures
+      if (extractionResults.totalFailed > 0) {
+        output.failed_chapters_by_book = {};
+        Object.entries(extractionResults.failed).forEach(([book, chapters]) => {
+          output.failed_chapters_by_book[`Book ${book}`] = {
+            failed_count: chapters.length,
+            chapters: chapters.map(ch => `Chapter ${ch.chapter}: ${ch.error}`)
+          };
+        });
+      }
+
+      outputEl.textContent = JSON.stringify(output, null, 2);
+    });
+  </script>
+</body>
+</html>
