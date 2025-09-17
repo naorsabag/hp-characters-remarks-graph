@@ -86,7 +86,7 @@
       "Lee Jordan", "Lily Potter", "Lucius Malfoy", "Ludo Bagman", "Luna Lovegood", "Madam Malkin",
       "Mandrakes", "Marcus Flint", "Marietta Edgecombe", "Mary Cattermole", "Masons", "McLaggen",
       "Michael Corner", "Minerva McGonagall", "Ministry of Magic", "Moaning Myrtle", "Molly Weasley",
-      "Mr. Weasley", "Mrs Norris", "Mrs. Figg", "Mrs. Norris", "Mudbloods", "Muggle campsite manager",
+      "Mrs. Figg", "Mrs. Norris", "Mudbloods", "Muggle campsite manager",
       "Muggle Prime Minister", "Muggles", "Mundungus Fletcher", "Musicians", "Nagini", "Narcissa Malfoy",
       "Nearly Headless Nick", "Neville Longbottom", "Nicolas Flamel", "Norbert (the dragon)",
       "Nymphadora Tonks", "Olive Hornby", "Oliver Wood", "Ollivander", "Olympe Maxime",
@@ -169,7 +169,7 @@
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
-            model: "gpt-4.1",
+            model: "gpt-4o",
             messages: [
               {
                 role: "system",
@@ -177,21 +177,25 @@
 You are an expert text analyzer. Analyze the provided Harry Potter text and extract ALL remarks and comments made by characters:
 - Read the entire text carefully, ensuring no comment or remarks is skipped.
 - Include remarks or comments made by any character mentioned in the text, not just the main ones.
-- Include remarks or comment made on any kind of group of people or animals or objects, for instance family, musicians, gingers, irish, cats, table....
-- Include remarks or comment made behind the back where the subject wasn't present.
+- Include remarks or comments made on any kind of group of people or animals or objects, for instance family, musicians, gingers, irish, cats, table....
+- Include remarks or comments made behind the back where the subject wasn't present.
+- Include remarks or comments happened in the character head, means that it wasn't said out loud but the character only thought it.
 - Do not include remarks stated by the narrator or descriptive text.
 - Only extract remarks from the provided text - do not use external knowledge.
-- IMPORTANT: Use ONLY character names from the predefined list in the JSON schema. If a character is not in the list, try to match them to the closest equivalent or use a broader category like "Students", "Wizards", "Muggles", etc.
-- For both character_name (who said it) and target (who it was about), use only names from the allowed list.
-- If the character made a remak about a group, include all the members of the group in the target.
-- If the character made a remak someone's belonging or relatives include both the person and the belonging or relatives in the target.
+- Use the exact character names as they appear in the text for both character_name (who said it) and target (who it was about).
+- If the character made a remark about a group, include all the members of the group in the target.
+- If the character made a remark someone's belonging or relatives include both the person and the belonging or relatives in the target.
+- For each remark, provide a brief description of what was said (1-2 sentences maximum).
 - Output strictly as JSON.
-- Keep the descriptions short.
+- Keep the descriptions short and concise.
                 `
               },
               {
                 role: "user",
-                content: `Extract ALL remarks and comments made by any character from this text from Harry Potter Book ${book}:\n\n${chunkText}`
+                content: `Extract ALL remarks and comments made by any character from this text:
+                """
+                ${chunkText}
+                """`
               }
             ],
             temperature: 0,
@@ -214,16 +218,14 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
                                   properties: {
                                       character_name: {
                                           type: "string",
-                                          enum: validCharacters,
-                                          description: "The character who said the remark. Must be from the predefined character list.",
+                                          description: "The character who said the remark.",
                                       },
                                       target: {
                                           type: "array",
                                           items: {
-                                              type: "string",
-                                              enum: validCharacters
+                                              type: "string"
                                           },
-                                          description: "The character(s) or group(s) or animal(s) or object(s) who were the subject of the remark. Each item must be from the predefined character list.",
+                                          description: "The character(s) or group(s) or animal(s) or object(s) who were the subject of the remark.",
                                       },
                                       sentiment: {
                                           type: "string",
@@ -231,8 +233,12 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
                                           description:
                                               "The overall sentiment of the remark: negative (insult), positive (sarcastic or disguised compliment), or neutral (non-insulting or unclear).",
                                       },
+                                      description: {
+                                          type: "string",
+                                          description: "A short description of the remark or comment made by the character.",
+                                      },
                                   },
-                                  required: ["character_name", "sentiment", "target"],
+                                  required: ["character_name", "sentiment", "target", "description"],
                                   additionalProperties: false,
                               },
                           },
@@ -265,6 +271,179 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
       }
     }
 
+    async function convertCharacterNames(remarkData) {
+      // Extract all unique character names from the data
+      const uniqueNames = new Set();
+      const contextData = [];
+
+      remarkData.remarks.forEach(remark => {
+        uniqueNames.add(remark.character_name);
+        remark.target.forEach(target => uniqueNames.add(target));
+
+        // Store context for self-reference resolution
+        contextData.push({
+          speaker: remark.character_name,
+          targets: remark.target,
+          description: remark.description
+        });
+      });
+
+      const namesToConvert = Array.from(uniqueNames).filter(name =>
+        !validCharacters.includes(name)
+      );
+
+      // If no names need conversion, return empty mapping
+      if (namesToConvert.length === 0) {
+        return { success: true, mapping: {} };
+      }
+
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Character conversion timeout after 30 seconds')), 30000);
+      });
+
+      const conversionPromise = async () => {
+        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${getApiKey()}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "gpt-4o",
+            messages: [
+              {
+                role: "system",
+                content: `
+You are a Harry Potter character name converter. Your job is to take character names and convert them to the closest match from the predefined list.
+
+For each character name, find the best match from the valid characters list. Special cases:
+
+1. **Families/Groups**: If the name refers to a family or group (e.g., "Ron's family", "the Weasleys", "Hermione's parents"), return ALL individual members from that group that are in the valid list.
+
+2. **Self-references**: If the name refers to the speaker themselves (e.g., "myself", "me", "I", "him", "her"), use the context provided to identify who the speaker is and map it to that character.
+
+3. **Belongings/Relatives**: If the name refers to someone's belongings or relatives (e.g., "Harry's owl", "Hermione's parents", "Ron's rat"), include both the owner AND the belonging/relative if in the valid list.
+
+4. **Regular names**: For regular character names, find the closest match (e.g., "Dumbledore" -> "Albus Dumbledore").
+
+5. **Unknown/Generic**: If no good match exists, use broader categories like "Students", "Wizards", "Muggles", etc., or "other" as last resort.
+
+The valid character names are: ${validCharacters.join(", ")}
+
+Return a mapping where each original name maps to an array of valid character names (even if it's just one character, use an array).
+                `
+              },
+              {
+                role: "user",
+                content: `Convert these character names to match the valid character list:
+
+                Names to convert: ${JSON.stringify(namesToConvert, null, 2)}
+
+                Context (for resolving self-references and belongings):
+                ${JSON.stringify(contextData, null, 2)}
+
+                Use the context to resolve self-references like "myself", "me", "I", "him", "her" to the actual speaker.
+                For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the owner and the belonging/relative in the mapped array.`
+              }
+            ],
+            temperature: 0,
+            response_format: {
+              type: "json_schema",
+              json_schema: {
+                name: "character_name_mapping",
+                strict: false,
+                schema: {
+                  type: "object",
+                  properties: {
+                    mapping: {
+                      type: "object",
+                      description: "A mapping of original character names to arrays of valid character names from the enum list",
+                      additionalProperties: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                          enum: validCharacters
+                        }
+                      }
+                    }
+                  },
+                  required: ["mapping"],
+                  additionalProperties: false
+                }
+              }
+            }
+          })
+        });
+
+        const completion = await response.json();
+
+        try {
+          const parsed = JSON.parse(completion.choices[0].message.content);
+          return { success: true, mapping: parsed.mapping };
+        } catch (err) {
+          console.error(`Failed to parse conversion JSON:`, err);
+          return { success: false, error: `Parse error: ${err.message}` };
+        }
+      };
+
+      try {
+        return await Promise.race([conversionPromise(), timeoutPromise]);
+      } catch (err) {
+        console.error(`Character conversion failed:`, err);
+        return { success: false, error: err.message };
+      }
+    }
+
+    function applyCharacterMapping(remarkData, mapping) {
+      // Create a deep copy of the original data
+      const updatedData = JSON.parse(JSON.stringify(remarkData));
+
+      // Apply mapping to character_name and target fields
+      updatedData.remarks.forEach(remark => {
+        const originalSpeaker = remark.character_name;
+
+        // For character_name (who said it), use the first character from the mapping array
+        // since a remark can only be said by one character at a time
+        if (mapping[remark.character_name] && Array.isArray(mapping[remark.character_name])) {
+          remark.character_name = mapping[remark.character_name][0];
+        }
+
+        // For target (who it was about), expand to all mapped characters
+        const expandedTargets = [];
+        const originalTargets = [...remark.target]; // Store original targets
+
+        remark.target.forEach(target => {
+          if (mapping[target] && Array.isArray(mapping[target])) {
+            // Add all characters from the mapping array
+            expandedTargets.push(...mapping[target]);
+          } else {
+            // Keep original target if no mapping found
+            expandedTargets.push(target);
+          }
+        });
+
+        // Special handling: If any original target implied the speaker's belongings/relatives
+        // (like "my family", "his owl", etc.), the LLM mapping should have included the speaker,
+        // but let's ensure the final mapped speaker is also in the targets if it makes sense
+        const finalSpeaker = remark.character_name;
+        const shouldIncludeSpeaker = originalTargets.some(target =>
+          target.toLowerCase().includes('my ') ||
+          target.toLowerCase().includes('myself') ||
+          target.toLowerCase().includes('me ') ||
+          (mapping[target] && mapping[target].includes(finalSpeaker))
+        );
+
+        if (shouldIncludeSpeaker && !expandedTargets.includes(finalSpeaker)) {
+          expandedTargets.push(finalSpeaker);
+        }
+
+        // Remove duplicates and update target array
+        remark.target = [...new Set(expandedTargets)];
+      });
+
+      return updatedData;
+    }
+
     async function extractInsults(updateProgress) {
       const fileInput = document.getElementById('bookFiles');
       const selectedFiles = Array.from(fileInput.files);
@@ -290,7 +469,7 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
         try {
           updateProgress(`Reading ${file.name}...`);
           const bookText = await readBookFile(file);
-          const chunks = [chunkText(bookText)[0]];
+          const chunks = chunkText(bookText);
 
           updateProgress(`${file.name}: Created ${chunks.length} chunks`);
 
@@ -329,12 +508,23 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
         const batchResults = await Promise.allSettled(batchPromises);
 
         // Process batch results
-        batchResults.forEach((result, index) => {
+        for (let index = 0; index < batchResults.length; index++) {
           completedChunks++;
+          const result = batchResults[index];
           const { book, chunkIndex } = batch[index];
 
           if (result.status === 'fulfilled' && result.value.success) {
-            allResults.push(result.value.data);
+            // Convert character names to enum values using mapping
+            const conversionResult = await convertCharacterNames(result.value.data);
+
+            if (conversionResult.success && conversionResult.mapping) {
+              const updatedData = applyCharacterMapping(result.value.data, conversionResult.mapping);
+              allResults.push(updatedData);
+            } else {
+              // If conversion fails, use original data and log warning
+              console.warn(`Character conversion failed for book ${book}, chunk ${chunkIndex}: ${conversionResult.error}`);
+              allResults.push(result.value.data);
+            }
           } else {
             const errorMessage = result.status === 'fulfilled'
               ? result.value.error
@@ -342,7 +532,7 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
             failedChunks.push({ book, chunkIndex, error: errorMessage });
             console.error(`Failed to process book ${book}, chunk ${chunkIndex}: ${errorMessage}`);
           }
-        });
+        }
 
         updateProgress(`Completed ${completedChunks}/${totalChunks} chunks...`);
 
