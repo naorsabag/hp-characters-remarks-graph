@@ -79,7 +79,7 @@
       "Gilderoy Lockhart", "Ginny Weasley", "girls", "Goblins", "boys", "Godric's Hollow",
       "Goyle", "Gringotts", "Griphook", "Gryffindor (the wizard)", "Gryffindor House",
       "Gwenog Jones", "Half-Blood Prince", "half-giants", "Harry Potter", "Harry Potter's friends",
-      "Hedwig", "Hepzibah Smith", "Hermione Granger", "Hestia Jones", "Hippogriffs", "Hogwarts",
+      "Hedwig", "Errol", "Owl/s (with no specific name)", "Mr. Borgin", "Hepzibah Smith", "Hermione Granger", "Hestia Jones", "Hippogriffs", "Hogwarts",
       "Hokey (house-elf)", "Horace Slughorn", "Horcruxes", "House-elves", "Hufflepuff", "Humans",
       "Igor Karkaroff", "Inferi", "Ireland", "James Potter", "Justin Finch-Fletchley",
       "Kendra Dumbledore", "Kingsley Shacklebolt", "Kreacher", "Lavender Brown", "Leaky Cauldron",
@@ -231,7 +231,7 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
                                           type: "string",
                                           enum: ["negative", "positive", "neutral"],
                                           description:
-                                              "The overall sentiment of the remark: negative (insult), positive (sarcastic or disguised compliment), or neutral (non-insulting or unclear).",
+                                              "Does the remark is a negative (insult or unkind statement) about the subject (target), positive, or neutral.",
                                       },
                                       description: {
                                           type: "string",
@@ -493,7 +493,7 @@ Return a mapping where each original name maps to an array of valid character na
       updateProgress(`Processing ${totalChunks} chunks across ${selectedFiles.length} books...`);
 
       // Process in batches
-      const batchSize = 5;
+      const batchSize = 10;
       for (let i = 0; i < allChunkRequests.length; i += batchSize) {
         const batch = allChunkRequests.slice(i, i + batchSize);
         const batchNumber = Math.floor(i / batchSize) + 1;
@@ -542,20 +542,87 @@ Return a mapping where each original name maps to an array of valid character na
         }
       }
 
-      // Group failed chunks by book for summary
-      const failedByBook = {};
-      failedChunks.forEach(({ book, chunkIndex, error }) => {
-        if (!failedByBook[book]) {
-          failedByBook[book] = [];
+      // Retry failed chunks one by one
+      let retriedChunks = [];
+      let remainingFailures = [];
+
+      if (failedChunks.length > 0) {
+        updateProgress(`Retrying ${failedChunks.length} failed chunks one by one...`);
+
+        for (let i = 0; i < failedChunks.length; i++) {
+          const { book, chunkIndex } = failedChunks[i];
+          const originalChunk = allChunkRequests.find(req =>
+            req.book === book && req.chunkIndex === chunkIndex
+          );
+
+          if (!originalChunk) {
+            console.error(`Could not find original chunk data for book ${book}, chunk ${chunkIndex}`);
+            remainingFailures.push(failedChunks[i]);
+            continue;
+          }
+
+          updateProgress(`Retrying ${i + 1}/${failedChunks.length}: Book ${book}, Chunk ${chunkIndex}...`);
+
+          try {
+            const retryResult = await makeApiCall(book, chunkIndex, originalChunk.chunkText);
+
+            if (retryResult.success) {
+              // Convert character names to enum values using mapping
+              const conversionResult = await convertCharacterNames(retryResult.data);
+
+              if (conversionResult.success && conversionResult.mapping) {
+                const updatedData = applyCharacterMapping(retryResult.data, conversionResult.mapping);
+                allResults.push(updatedData);
+                retriedChunks.push({ book, chunkIndex });
+              } else {
+                // If conversion fails, use original data and log warning
+                console.warn(`Character conversion failed for retry of book ${book}, chunk ${chunkIndex}: ${conversionResult.error}`);
+                allResults.push(retryResult.data);
+                retriedChunks.push({ book, chunkIndex });
+              }
+              updateProgress(`✅ Retry successful: Book ${book}, Chunk ${chunkIndex}`);
+            } else {
+              remainingFailures.push({ book, chunkIndex, error: retryResult.error });
+              updateProgress(`❌ Retry failed: Book ${book}, Chunk ${chunkIndex} - ${retryResult.error}`);
+            }
+          } catch (error) {
+            remainingFailures.push({ book, chunkIndex, error: error.message });
+            updateProgress(`❌ Retry failed: Book ${book}, Chunk ${chunkIndex} - ${error.message}`);
+          }
+
+          // Add a small delay between retry attempts
+          if (i < failedChunks.length - 1) {
+            await new Promise(r => setTimeout(r, 2000));
+          }
         }
-        failedByBook[book].push({ chunkIndex, error });
+      }
+
+      // Group remaining failed chunks by book for summary
+      const remainingFailedByBook = {};
+      remainingFailures.forEach(({ book, chunkIndex, error }) => {
+        if (!remainingFailedByBook[book]) {
+          remainingFailedByBook[book] = [];
+        }
+        remainingFailedByBook[book].push({ chunkIndex, error });
+      });
+
+      // Group successfully retried chunks by book
+      const retriedByBook = {};
+      retriedChunks.forEach(({ book, chunkIndex }) => {
+        if (!retriedByBook[book]) {
+          retriedByBook[book] = [];
+        }
+        retriedByBook[book].push(chunkIndex);
       });
 
       return {
         results: allResults,
-        failed: failedByBook,
-        totalFailed: failedChunks.length,
-        totalSuccess: allResults.length
+        failed: remainingFailedByBook,
+        totalFailed: remainingFailures.length,
+        totalSuccess: allResults.length,
+        retriedSuccess: retriedChunks.length,
+        retriedByBook: retriedByBook,
+        originalFailures: failedChunks.length
       };
     }
 
@@ -593,28 +660,49 @@ Return a mapping where each original name maps to an array of valid character na
           progressEl.textContent = msg;
         });
 
-        // Create summary message
+        // Create summary message with retry information
         let summary = `Done! Successfully processed ${extractionResults.totalSuccess} chunks.`;
-        if (extractionResults.totalFailed > 0) {
-          summary += ` ${extractionResults.totalFailed} chunks failed.`;
+        if (extractionResults.originalFailures > 0) {
+          summary += ` Originally ${extractionResults.originalFailures} chunks failed.`;
+          if (extractionResults.retriedSuccess > 0) {
+            summary += ` Successfully retried ${extractionResults.retriedSuccess} chunks.`;
+          }
+          if (extractionResults.totalFailed > 0) {
+            summary += ` ${extractionResults.totalFailed} chunks remain failed after retry.`;
+          } else {
+            summary += ` All failed chunks were successfully retried!`;
+          }
         }
         progressEl.textContent = summary;
 
-        // Prepare output with results and failed chunks summary
+        // Prepare output with results and retry summary
         let output = {
           successful_chunks: extractionResults.results,
           summary: {
             total_chunks: extractionResults.totalSuccess + extractionResults.totalFailed,
             successful: extractionResults.totalSuccess,
-            failed: extractionResults.totalFailed
+            original_failures: extractionResults.originalFailures,
+            retried_successes: extractionResults.retriedSuccess,
+            remaining_failures: extractionResults.totalFailed
           }
         };
 
-        // Add failed chunks summary if there are any failures
+        // Add retry success summary if there were successful retries
+        if (extractionResults.retriedSuccess > 0) {
+          output.successfully_retried_chunks_by_book = {};
+          Object.entries(extractionResults.retriedByBook).forEach(([book, chunkIndexes]) => {
+            output.successfully_retried_chunks_by_book[`Book ${book}`] = {
+              retried_count: chunkIndexes.length,
+              chunk_indexes: chunkIndexes
+            };
+          });
+        }
+
+        // Add remaining failed chunks summary if there are any remaining failures
         if (extractionResults.totalFailed > 0) {
-          output.failed_chunks_by_book = {};
+          output.remaining_failed_chunks_by_book = {};
           Object.entries(extractionResults.failed).forEach(([book, chunks]) => {
-            output.failed_chunks_by_book[`Book ${book}`] = {
+            output.remaining_failed_chunks_by_book[`Book ${book}`] = {
               failed_count: chunks.length,
               chunks: chunks.map(ch => `Chunk ${ch.chunkIndex}: ${ch.error}`)
             };
