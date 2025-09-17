@@ -23,20 +23,34 @@
 </head>
 <body>
   <h1>Harry Potter Character Remarks Extractor</h1>
-  
+
   <div style="margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 6px; background-color: #f9f9f9;">
     <label for="apiKeyInput" style="display: block; margin-bottom: 8px; font-weight: bold;">OpenAI API Key:</label>
-    <input 
-      type="password" 
-      id="apiKeyInput" 
-      placeholder="Enter your OpenAI API key (sk-...)" 
+    <input
+      type="password"
+      id="apiKeyInput"
+      placeholder="Enter your OpenAI API key (sk-...)"
       style="width: 100%; max-width: 500px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 8px;"
     />
     <div style="font-size: 12px; color: #666;">
       Your API key is stored only in your browser and is never sent anywhere except to OpenAI's servers.
     </div>
   </div>
-  
+
+  <div style="margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 6px; background-color: #f9f9f9;">
+    <label for="bookFiles" style="display: block; margin-bottom: 8px; font-weight: bold;">Select Harry Potter Book Files:</label>
+    <input
+      type="file"
+      id="bookFiles"
+      multiple
+      accept=".txt"
+      style="width: 100%; max-width: 500px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 8px;"
+    />
+    <div style="font-size: 12px; color: #666;">
+      Select all 7 book text files (Book1.txt, Book2.txt, etc.). Files are processed locally in your browser.
+    </div>
+  </div>
+
   <div id="progress">Waiting to start...</div>
   <button id="startBtn">Start Extraction</button>
   <pre id="output"></pre>
@@ -45,16 +59,6 @@
     function getApiKey() {
       return document.getElementById('apiKeyInput').value.trim();
     }
-
-    const bookFiles = [
-      'books/Book1.txt',
-      'books/Book2.txt', 
-      'books/Book3.txt',
-      'books/Book4.txt',
-      'books/Book5.txt',
-      'books/Book6.txt',
-      'books/Book7.txt'
-    ];
 
     const validCharacters = [
       "Vernon Dursley", "Aberforth Dumbledore", "Alastor Moody", "Albus Dumbledore", "Alecto Carrow",
@@ -97,7 +101,7 @@
       "start-of-term banquet", "Students", "Susan Bones", "Sybill Trelawney", "target", "Terry Boot",
       "the cave", "The Daily Prophet", "the Dark Mark", "The Death Eaters", "The Deathly Hallows",
       "the Lestranges", "The Ministry", "the Mirror of Erised", "the monster in the Chamber",
-      "The Peverell family", "the potion", "The Prophecy", "The Quibbler", "staff", 
+      "The Peverell family", "the potion", "The Prophecy", "The Quibbler", "staff",
       "the Stone (Philosopher's Stone)", "students", "The Sword of Gryffindor",
       "The Tale of the Three Brothers", "Thestrals", "third-floor corridor", "Tom (Leaky Cauldron landlord)",
       "Triwizard Tournament", "Troll", "Unforgivable Curses", "Vampires", "Veela", "Viktor Krum",
@@ -105,16 +109,12 @@
       "Xenophilius Lovegood", "Yaxley", "Zacharias Smith", "other"
     ];
 
-    // Function to read a book file
-    async function readBookFile(filePath) {
+    // Function to read a book file from File object
+    async function readBookFile(file) {
       try {
-        const response = await fetch(filePath);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch ${filePath}: ${response.status}`);
-        }
-        return await response.text();
+        return await file.text();
       } catch (error) {
-        console.error(`Error reading ${filePath}:`, error);
+        console.error(`Error reading ${file.name}:`, error);
         throw error;
       }
     }
@@ -124,13 +124,13 @@
       const chunks = [];
       // Split by double newlines (paragraphs)
       const paragraphs = text.split('\n\n');
-      
+
       let currentChunk = '';
       let currentWordCount = 0;
-      
+
       for (const paragraph of paragraphs) {
         const paragraphWords = paragraph.trim().split(/\s+/).length;
-        
+
         // If adding this paragraph would exceed the limit and we already have content
         if (currentWordCount + paragraphWords > maxWords && currentChunk.length > 0) {
           // Save current chunk and start a new one
@@ -147,12 +147,12 @@
           currentWordCount += paragraphWords;
         }
       }
-      
+
       // Add the last chunk if it has content
       if (currentChunk.trim().length > 0) {
         chunks.push(currentChunk.trim());
       }
-      
+
       return chunks;
     }
 
@@ -223,7 +223,7 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
                                               type: "string",
                                               enum: validCharacters
                                           },
-                                          description: "The character(s) or group(s) who were the subject of the remark. Each item must be from the predefined character list.",
+                                          description: "The character(s) or group(s) or animal(s) or object(s) who were the subject of the remark. Each item must be from the predefined character list.",
                                       },
                                       sentiment: {
                                           type: "string",
@@ -266,24 +266,34 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
     }
 
     async function extractInsults(updateProgress) {
+      const fileInput = document.getElementById('bookFiles');
+      const selectedFiles = Array.from(fileInput.files);
+
+      if (selectedFiles.length === 0) {
+        throw new Error('Please select book files first.');
+      }
+
+      // Sort files by name to ensure proper book order
+      selectedFiles.sort((a, b) => a.name.localeCompare(b.name));
+
       updateProgress('Reading book files...');
-      
+
       const allChunkRequests = [];
       let allResults = [];
       let failedChunks = [];
 
       // Read all book files and create chunks
-      for (let bookIndex = 0; bookIndex < bookFiles.length; bookIndex++) {
-        const bookNumber = bookIndex + 1;
-        const filePath = bookFiles[bookIndex];
-        
+      for (let fileIndex = 0; fileIndex < selectedFiles.length; fileIndex++) {
+        const file = selectedFiles[fileIndex];
+        const bookNumber = fileIndex + 1;
+
         try {
-          updateProgress(`Reading Book ${bookNumber}...`);
-          const bookText = await readBookFile(filePath);
-          const chunks = chunkText(bookText);
-          
-          updateProgress(`Book ${bookNumber}: Created ${chunks.length} chunks`);
-          
+          updateProgress(`Reading ${file.name}...`);
+          const bookText = await readBookFile(file);
+          const chunks = [chunkText(bookText)[0]];
+
+          updateProgress(`${file.name}: Created ${chunks.length} chunks`);
+
           // Add all chunks for this book to the processing queue
           for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
             allChunkRequests.push({
@@ -293,15 +303,15 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
             });
           }
         } catch (error) {
-          console.error(`Failed to read ${filePath}:`, error);
-          updateProgress(`❌ Failed to read Book ${bookNumber}: ${error.message}`);
+          console.error(`Failed to read ${file.name}:`, error);
+          updateProgress(`❌ Failed to read ${file.name}: ${error.message}`);
         }
       }
 
       const totalChunks = allChunkRequests.length;
       let completedChunks = 0;
-      
-      updateProgress(`Processing ${totalChunks} chunks across ${bookFiles.length} books...`);
+
+      updateProgress(`Processing ${totalChunks} chunks across ${selectedFiles.length} books...`);
 
       // Process in batches
       const batchSize = 5;
@@ -313,7 +323,7 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
         updateProgress(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} chunks)...`);
 
         // Execute batch concurrently
-        const batchPromises = batch.map(({ book, chunkIndex, chunkText }) => 
+        const batchPromises = batch.map(({ book, chunkIndex, chunkText }) =>
           makeApiCall(book, chunkIndex, chunkText)
         );
         const batchResults = await Promise.allSettled(batchPromises);
@@ -364,7 +374,7 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
       const outputEl = document.getElementById("output");
       const apiKey = getApiKey();
 
-      // Validate API key
+      // Validate inputs
       if (!apiKey) {
         progressEl.textContent = "❌ Please enter your OpenAI API key before starting extraction.";
         progressEl.style.color = "red";
@@ -377,43 +387,56 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
         return;
       }
 
+      const fileInput = document.getElementById('bookFiles');
+      if (fileInput.files.length === 0) {
+        progressEl.textContent = "❌ Please select book files before starting extraction.";
+        progressEl.style.color = "red";
+        return;
+      }
+
       // Reset progress color
       progressEl.style.color = "";
       progressEl.textContent = "Starting extraction...";
 
-      const extractionResults = await extractInsults(msg => {
-        progressEl.textContent = msg;
-      });
-
-      // Create summary message
-      let summary = `Done! Successfully processed ${extractionResults.totalSuccess} chunks.`;
-      if (extractionResults.totalFailed > 0) {
-        summary += ` ${extractionResults.totalFailed} chunks failed.`;
-      }
-      progressEl.textContent = summary;
-
-      // Prepare output with results and failed chunks summary
-      let output = {
-        successful_chunks: extractionResults.results,
-        summary: {
-          total_chunks: extractionResults.totalSuccess + extractionResults.totalFailed,
-          successful: extractionResults.totalSuccess,
-          failed: extractionResults.totalFailed
-        }
-      };
-
-      // Add failed chunks summary if there are any failures
-      if (extractionResults.totalFailed > 0) {
-        output.failed_chunks_by_book = {};
-        Object.entries(extractionResults.failed).forEach(([book, chunks]) => {
-          output.failed_chunks_by_book[`Book ${book}`] = {
-            failed_count: chunks.length,
-            chunks: chunks.map(ch => `Chunk ${ch.chunkIndex}: ${ch.error}`)
-          };
+      try {
+        const extractionResults = await extractInsults(msg => {
+          progressEl.textContent = msg;
         });
-      }
 
-      outputEl.textContent = JSON.stringify(output, null, 2);
+        // Create summary message
+        let summary = `Done! Successfully processed ${extractionResults.totalSuccess} chunks.`;
+        if (extractionResults.totalFailed > 0) {
+          summary += ` ${extractionResults.totalFailed} chunks failed.`;
+        }
+        progressEl.textContent = summary;
+
+        // Prepare output with results and failed chunks summary
+        let output = {
+          successful_chunks: extractionResults.results,
+          summary: {
+            total_chunks: extractionResults.totalSuccess + extractionResults.totalFailed,
+            successful: extractionResults.totalSuccess,
+            failed: extractionResults.totalFailed
+          }
+        };
+
+        // Add failed chunks summary if there are any failures
+        if (extractionResults.totalFailed > 0) {
+          output.failed_chunks_by_book = {};
+          Object.entries(extractionResults.failed).forEach(([book, chunks]) => {
+            output.failed_chunks_by_book[`Book ${book}`] = {
+              failed_count: chunks.length,
+              chunks: chunks.map(ch => `Chunk ${ch.chunkIndex}: ${ch.error}`)
+            };
+          });
+        }
+
+        outputEl.textContent = JSON.stringify(output, null, 2);
+      } catch (error) {
+        progressEl.textContent = `❌ Error: ${error.message}`;
+        progressEl.style.color = "red";
+        console.error('Extraction error:', error);
+      }
     });
   </script>
 </body>
