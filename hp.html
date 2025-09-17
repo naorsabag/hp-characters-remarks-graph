@@ -75,7 +75,7 @@
       "dragon eggs", "Dragons", "Dudley Dursley", "Durmstrang", "Egypt", "Eldred Worple",
       "Emmeline Vance", "Ernie Macmillan", "Ernie Prang", "Fang", "Fat Lady", "Fawkes",
       "Fenrir Greyback", "Filius Flitwick", "Firenze", "Fleur Delacour", "Forbidden Forest",
-      "Frank Bryce", "Fred Weasley", "Gellert Grindelwald", "George Weasley", "Giants",
+      "Frank Bryce", "Fred Weasley", "Gellert Grindelwald", "George Weasley", "Giants", "Colin Creevey",
       "Gilderoy Lockhart", "Ginny Weasley", "girls", "Goblins", "boys", "Godric's Hollow",
       "Goyle", "Gringotts", "Griphook", "Gryffindor (the wizard)", "Gryffindor House",
       "Gwenog Jones", "Half-Blood Prince", "half-giants", "Harry Potter", "Harry Potter's friends",
@@ -91,11 +91,11 @@
       "Nearly Headless Nick", "Neville Longbottom", "Nicolas Flamel", "Norbert (the dragon)",
       "Nymphadora Tonks", "Olive Hornby", "Oliver Wood", "Ollivander", "Olympe Maxime",
       "Order of the Phoenix", "Padma Patil", "Pansy Parkinson", "Parvati Patil", "Patronus Charm",
-      "Peeves", "Penelope Clearwater", "Percival Dumbledore", "Percy Weasley", "Peter Pettigrew",
-      "Petunia Dursley", "Piers Polkiss", "Pius Thicknesse", "police", "Pomona Sprout", "postman",
-      "Potions textbook", "Quidditch", "Quirinus Quirrell", "Ravenclaw", "Reg Cattermole",
-      "Regulus Black", "Remus Lupin", "Rita Skeeter", "Roger Davies", "Rolanda Hooch", "Romilda Vane",
-      "Ron Weasley", "Ronan", "Rubeus Hagrid", "Rufus Scrimgeour", "Sanguini (the vampire)",
+      "Peeves", "Penelope Clearwater", "Percival Dumbledore", "Percy Weasley", "Peter Pettigrew", "Sir Patrick",
+      "Petunia Dursley", "Piers Polkiss", "Pius Thicknesse", "police", "Pomona Sprout", "Professor Binns",
+      "Potions textbook", "Quidditch", "Quirinus Quirrell", "Ravenclaw", "Reg Cattermole", "Madam Pince", "Madam Pomfrey",
+      "Regulus Black", "Remus Lupin", "Rita Skeeter", "Roger Davies", "Rolanda Hooch", "Romilda Vane", "Professor Dippet",
+      "Ron Weasley", "Ronan", "Rubeus Hagrid", "Rufus Scrimgeour", "Sanguini (the vampire)", "Gnome",
       "Scabior (Snatcher)", "Seamus Finnigan", "Severus Snape", "Sirius Black", "Slughorn",
       "Slytherin", "Snake", "Snatchers", "Sorting Hat", "spiders", "Squibs", "Stan Shunpike",
       "start-of-term banquet", "Students", "Susan Bones", "Sybill Trelawney", "target", "Terry Boot",
@@ -156,7 +156,7 @@
       return chunks;
     }
 
-    async function makeApiCall(book, chunkIndex, chunkText) {
+    async function makeApiCall(book, chunkIndex, chunkText, previousChunkText = null) {
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => reject(new Error('Request timeout after 30 seconds')), 30000);
       });
@@ -182,6 +182,7 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
 - Include remarks or comments happened in the character head, means that it wasn't said out loud but the character only thought it.
 - Do not include remarks stated by the narrator or descriptive text.
 - Only extract remarks from the provided text - do not use external knowledge.
+- When context from a previous section is provided, use it to better understand ongoing conversations and situations, but extract remarks ONLY from the current text section.
 - Use the exact character names as they appear in the text for both character_name (who said it) and target (who it was about).
 - If the character made a remark about a group, include all the members of the group in the target.
 - If the character made a remark someone's belonging or relatives include both the person and the belonging or relatives in the target.
@@ -192,10 +193,20 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
               },
               {
                 role: "user",
-                content: `Extract ALL remarks and comments made by any character from this text:
+                content: `${previousChunkText ? `Here is some context from the previous section for continuity:
+                """
+                ${previousChunkText}
+                """
+
+                Now extract ALL remarks and comments made by any character from this current text:
                 """
                 ${chunkText}
-                """`
+                """
+
+                Note: The previous section is provided only for context. Extract remarks ONLY from the current text, not from the context section.` : `Extract ALL remarks and comments made by any character from this text:
+                """
+                ${chunkText}
+                """`}`
               }
             ],
             temperature: 0,
@@ -225,7 +236,7 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
                                           items: {
                                               type: "string"
                                           },
-                                          description: "The character(s) or group(s) or animal(s) or object(s) who were the subject of the remark.",
+                                          description: "The character(s) or group(s) or animal(s) or object(s) who were the subject of the remark. could be also someone's family, friends, animals, objects, etc. in that case need to include the owner or the relative in the target.",
                                       },
                                       sentiment: {
                                           type: "string",
@@ -478,7 +489,8 @@ Return a mapping where each original name maps to an array of valid character na
             allChunkRequests.push({
               book: bookNumber,
               chunkIndex: chunkIndex,
-              chunkText: chunks[chunkIndex]
+              chunkText: chunks[chunkIndex],
+              previousChunkText: chunkIndex > 0 ? chunks[chunkIndex - 1] : null
             });
           }
         } catch (error) {
@@ -502,8 +514,8 @@ Return a mapping where each original name maps to an array of valid character na
         updateProgress(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} chunks)...`);
 
         // Execute batch concurrently
-        const batchPromises = batch.map(({ book, chunkIndex, chunkText }) =>
-          makeApiCall(book, chunkIndex, chunkText)
+        const batchPromises = batch.map(({ book, chunkIndex, chunkText, previousChunkText }) =>
+          makeApiCall(book, chunkIndex, chunkText, previousChunkText)
         );
         const batchResults = await Promise.allSettled(batchPromises);
 
@@ -564,7 +576,7 @@ Return a mapping where each original name maps to an array of valid character na
           updateProgress(`Retrying ${i + 1}/${failedChunks.length}: Book ${book}, Chunk ${chunkIndex}...`);
 
           try {
-            const retryResult = await makeApiCall(book, chunkIndex, originalChunk.chunkText);
+            const retryResult = await makeApiCall(book, chunkIndex, originalChunk.chunkText, originalChunk.previousChunkText);
 
             if (retryResult.success) {
               // Convert character names to enum values using mapping
