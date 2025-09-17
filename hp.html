@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>HP Insults Extractor</title>
+  <title>HP Character Remarks Extractor</title>
   <style>
     body {
       font-family: sans-serif;
@@ -22,7 +22,7 @@
   </style>
 </head>
 <body>
-  <h1>Harry Potter Insults Extractor</h1>
+  <h1>Harry Potter Character Remarks Extractor</h1>
   
   <div style="margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 6px; background-color: #f9f9f9;">
     <label for="apiKeyInput" style="display: block; margin-bottom: 8px; font-weight: bold;">OpenAI API Key:</label>
@@ -46,17 +46,117 @@
       return document.getElementById('apiKeyInput').value.trim();
     }
 
-    const chaptersPerBook = {
-      1: 17,
-      2: 18,
-      3: 22,
-      4: 37,
-      5: 38,
-      6: 30,
-      7: 36
-    };
+    const bookFiles = [
+      'books/Book1.txt',
+      'books/Book2.txt', 
+      'books/Book3.txt',
+      'books/Book4.txt',
+      'books/Book5.txt',
+      'books/Book6.txt',
+      'books/Book7.txt'
+    ];
 
-    async function makeApiCall(book, chapter) {
+    const validCharacters = [
+      "Vernon Dursley", "Aberforth Dumbledore", "Alastor Moody", "Albus Dumbledore", "Alecto Carrow",
+      "Alicia Spinnet", "Amelia Bones", "Amycus Carrow", "Angelina Johnson", "Aragog", "Argus Filch",
+      "Ariana Dumbledore", "Arthur Weasley", "Aunt Marge", "Aurors", "Avery", "Bagman", "Bane",
+      "Barty Crouch Jr.", "Barty Crouch Sr.", "Bathilda Bagshot", "Beauxbatons students", "Bellatrix Lestrange",
+      "Bertha Jorkins", "Bill Weasley", "Blaise Zabini", "Boggart", "Brazil", "Buckbeak",
+      "Bulgarian Quidditch Team", "Bulgarians", "Cedric Diggory", "Champions", "Charity Burbage",
+      "Charlie Weasley", "chess pieces", "Cho Chang", "Colonel Fubster", "Cormac McLaggen",
+      "Cornelius Fudge", "Cornish pixies", "Crabbe", "Crookshanks", "Dawlish", "Dean Thomas",
+      "Death", "Death Eater (Dolohov)", "Death Eater (Lestrange)", "Death Eater (Macnair)",
+      "Death Eater (Nott)", "Death Eaters", "Dedalus Diggle", "Dementors", "Devil's Snare",
+      "Dirigible plums", "Divination", "Dobby", "Dogs", "Dolores Umbridge", "Draco Malfoy",
+      "dragon eggs", "Dragons", "Dudley Dursley", "Durmstrang", "Egypt", "Eldred Worple",
+      "Emmeline Vance", "Ernie Macmillan", "Ernie Prang", "Fang", "Fat Lady", "Fawkes",
+      "Fenrir Greyback", "Filius Flitwick", "Firenze", "Fleur Delacour", "Forbidden Forest",
+      "Frank Bryce", "Fred Weasley", "Gellert Grindelwald", "George Weasley", "Giants",
+      "Gilderoy Lockhart", "Ginny Weasley", "girls", "Goblins", "boys", "Godric's Hollow",
+      "Goyle", "Gringotts", "Griphook", "Gryffindor (the wizard)", "Gryffindor House",
+      "Gwenog Jones", "Half-Blood Prince", "half-giants", "Harry Potter", "Harry Potter's friends",
+      "Hedwig", "Hepzibah Smith", "Hermione Granger", "Hestia Jones", "Hippogriffs", "Hogwarts",
+      "Hokey (house-elf)", "Horace Slughorn", "Horcruxes", "House-elves", "Hufflepuff", "Humans",
+      "Igor Karkaroff", "Inferi", "Ireland", "James Potter", "Justin Finch-Fletchley",
+      "Kendra Dumbledore", "Kingsley Shacklebolt", "Kreacher", "Lavender Brown", "Leaky Cauldron",
+      "Lee Jordan", "Lily Potter", "Lucius Malfoy", "Ludo Bagman", "Luna Lovegood", "Madam Malkin",
+      "Mandrakes", "Marcus Flint", "Marietta Edgecombe", "Mary Cattermole", "Masons", "McLaggen",
+      "Michael Corner", "Minerva McGonagall", "Ministry of Magic", "Moaning Myrtle", "Molly Weasley",
+      "Mr. Weasley", "Mrs Norris", "Mrs. Figg", "Mrs. Norris", "Mudbloods", "Muggle campsite manager",
+      "Muggle Prime Minister", "Muggles", "Mundungus Fletcher", "Musicians", "Nagini", "Narcissa Malfoy",
+      "Nearly Headless Nick", "Neville Longbottom", "Nicolas Flamel", "Norbert (the dragon)",
+      "Nymphadora Tonks", "Olive Hornby", "Oliver Wood", "Ollivander", "Olympe Maxime",
+      "Order of the Phoenix", "Padma Patil", "Pansy Parkinson", "Parvati Patil", "Patronus Charm",
+      "Peeves", "Penelope Clearwater", "Percival Dumbledore", "Percy Weasley", "Peter Pettigrew",
+      "Petunia Dursley", "Piers Polkiss", "Pius Thicknesse", "police", "Pomona Sprout", "postman",
+      "Potions textbook", "Quidditch", "Quirinus Quirrell", "Ravenclaw", "Reg Cattermole",
+      "Regulus Black", "Remus Lupin", "Rita Skeeter", "Roger Davies", "Rolanda Hooch", "Romilda Vane",
+      "Ron Weasley", "Ronan", "Rubeus Hagrid", "Rufus Scrimgeour", "Sanguini (the vampire)",
+      "Scabior (Snatcher)", "Seamus Finnigan", "Severus Snape", "Sirius Black", "Slughorn",
+      "Slytherin", "Snake", "Snatchers", "Sorting Hat", "spiders", "Squibs", "Stan Shunpike",
+      "start-of-term banquet", "Students", "Susan Bones", "Sybill Trelawney", "target", "Terry Boot",
+      "the cave", "The Daily Prophet", "the Dark Mark", "The Death Eaters", "The Deathly Hallows",
+      "the Lestranges", "The Ministry", "the Mirror of Erised", "the monster in the Chamber",
+      "The Peverell family", "the potion", "The Prophecy", "The Quibbler", "staff", 
+      "the Stone (Philosopher's Stone)", "students", "The Sword of Gryffindor",
+      "The Tale of the Three Brothers", "Thestrals", "third-floor corridor", "Tom (Leaky Cauldron landlord)",
+      "Triwizard Tournament", "Troll", "Unforgivable Curses", "Vampires", "Veela", "Viktor Krum",
+      "villagers", "Voldemort", "Wands", "Weather", "wedding guests", "Winky", "Wizards",
+      "Xenophilius Lovegood", "Yaxley", "Zacharias Smith", "other"
+    ];
+
+    // Function to read a book file
+    async function readBookFile(filePath) {
+      try {
+        const response = await fetch(filePath);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch ${filePath}: ${response.status}`);
+        }
+        return await response.text();
+      } catch (error) {
+        console.error(`Error reading ${filePath}:`, error);
+        throw error;
+      }
+    }
+
+    // Function to split text into chunks of approximately 1000 words, respecting paragraph boundaries
+    function chunkText(text, maxWords = 1000) {
+      const chunks = [];
+      // Split by double newlines (paragraphs)
+      const paragraphs = text.split('\n\n');
+      
+      let currentChunk = '';
+      let currentWordCount = 0;
+      
+      for (const paragraph of paragraphs) {
+        const paragraphWords = paragraph.trim().split(/\s+/).length;
+        
+        // If adding this paragraph would exceed the limit and we already have content
+        if (currentWordCount + paragraphWords > maxWords && currentChunk.length > 0) {
+          // Save current chunk and start a new one
+          chunks.push(currentChunk.trim());
+          currentChunk = paragraph;
+          currentWordCount = paragraphWords;
+        } else {
+          // Add paragraph to current chunk
+          if (currentChunk.length > 0) {
+            currentChunk += '\n\n' + paragraph;
+          } else {
+            currentChunk = paragraph;
+          }
+          currentWordCount += paragraphWords;
+        }
+      }
+      
+      // Add the last chunk if it has content
+      if (currentChunk.trim().length > 0) {
+        chunks.push(currentChunk.trim());
+      }
+      
+      return chunks;
+    }
+
+    async function makeApiCall(book, chunkIndex, chunkText) {
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => reject(new Error('Request timeout after 30 seconds')), 30000);
       });
@@ -74,21 +174,24 @@
               {
                 role: "system",
                 content: `
-You are an expert on Harry Potter books.
-For the specified book and chapter you need to state ALL remarks  and comments made by characters:
-- Read the entire chapter line by line, ensuring no dialogue or character thought is skipped.
-- Include remarks or comments made by any character in the chapter, not just the main or present ones.
-- Include remarks or comment made on any kind of group of people or animals, for instance family, musicians, gingers, irish, cats....
+You are an expert text analyzer. Analyze the provided Harry Potter text and extract ALL remarks and comments made by characters:
+- Read the entire text carefully, ensuring no comment or remarks is skipped.
+- Include remarks or comments made by any character mentioned in the text, not just the main ones.
+- Include remarks or comment made on any kind of group of people or animals or objects, for instance family, musicians, gingers, irish, cats, table....
 - Include remarks or comment made behind the back where the subject wasn't present.
-- Do not include remarks stated by the narrator.
-- Use a checklist of all characters appearing in the chapter to verify that no character's remarks are missed.
+- Do not include remarks stated by the narrator or descriptive text.
+- Only extract remarks from the provided text - do not use external knowledge.
+- IMPORTANT: Use ONLY character names from the predefined list in the JSON schema. If a character is not in the list, try to match them to the closest equivalent or use a broader category like "Students", "Wizards", "Muggles", etc.
+- For both character_name (who said it) and target (who it was about), use only names from the allowed list.
+- If the character made a remak about a group, include all the members of the group in the target.
+- If the character made a remak someone's belonging or relatives include both the person and the belonging or relatives in the target.
 - Output strictly as JSON.
 - Keep the descriptions short.
                 `
               },
               {
                 role: "user",
-                content: `Extract ALL remarks and comments made by any character from book ${book}, chapter ${chapter}.`
+                content: `Extract ALL remarks and comments made by any character from this text from Harry Potter Book ${book}:\n\n${chunkText}`
               }
             ],
             temperature: 0,
@@ -103,9 +206,6 @@ For the specified book and chapter you need to state ALL remarks  and comments m
                           book: {
                               type: "integer",
                           },
-                          chapter: {
-                              type: "integer",
-                          },
                           remarks: {
                               type: "array",
                               description: "A list of ALL remarks or comments stated by any character.",
@@ -114,11 +214,16 @@ For the specified book and chapter you need to state ALL remarks  and comments m
                                   properties: {
                                       character_name: {
                                           type: "string",
-                                          description: "The character who said the remark.",
+                                          enum: validCharacters,
+                                          description: "The character who said the remark. Must be from the predefined character list.",
                                       },
                                       target: {
-                                          type: "string",
-                                          description: "The character or group who was the subject of the remark.",
+                                          type: "array",
+                                          items: {
+                                              type: "string",
+                                              enum: validCharacters
+                                          },
+                                          description: "The character(s) or group(s) who were the subject of the remark. Each item must be from the predefined character list.",
                                       },
                                       sentiment: {
                                           type: "string",
@@ -132,7 +237,7 @@ For the specified book and chapter you need to state ALL remarks  and comments m
                               },
                           },
                       },
-                      required: ["book", "chapter", "remarks"],
+                      required: ["book", "remarks"],
                       additionalProperties: false,
                   },
 
@@ -145,57 +250,78 @@ For the specified book and chapter you need to state ALL remarks  and comments m
 
         try {
           const parsed = JSON.parse(completion.choices[0].message.content);
-          return { success: true, data: parsed, book, chapter };
+          return { success: true, data: parsed, book, chunkIndex };
         } catch (err) {
-          console.error(`Failed to parse JSON for book ${book}, chapter ${chapter}:`, err);
-          return { success: false, error: `Parse error: ${err.message}`, book, chapter };
+          console.error(`Failed to parse JSON for book ${book}, chunk ${chunkIndex}:`, err);
+          return { success: false, error: `Parse error: ${err.message}`, book, chunkIndex };
         }
       };
 
       try {
         return await Promise.race([apiCallPromise(), timeoutPromise]);
       } catch (err) {
-        console.error(`API call failed for book ${book}, chapter ${chapter}:`, err);
-        return { success: false, error: err.message, book, chapter };
+        console.error(`API call failed for book ${book}, chunk ${chunkIndex}:`, err);
+        return { success: false, error: err.message, book, chunkIndex };
       }
     }
 
     async function extractInsults(updateProgress) {
-      // Create array of specific failed chapter requests to retry
-      const failedChaptersToRetry = {
-        3: [4],
-        4: [34, 35]
-      };
-
-      const allChapterRequests = [];
-      Object.entries(failedChaptersToRetry).forEach(([book, chapters]) => {
-        chapters.forEach(chapter => {
-          allChapterRequests.push({ book: parseInt(book), chapter });
-        });
-      });
-
-      const totalChapters = allChapterRequests.length;
-      let completedChapters = 0;
+      updateProgress('Reading book files...');
+      
+      const allChunkRequests = [];
       let allResults = [];
-      let failedChapters = [];
+      let failedChunks = [];
 
-      // Process in batches of 2
-      const batchSize = 10;
-      for (let i = 0; i < allChapterRequests.length; i += batchSize) {
-        const batch = allChapterRequests.slice(i, i + batchSize);
+      // Read all book files and create chunks
+      for (let bookIndex = 0; bookIndex < bookFiles.length; bookIndex++) {
+        const bookNumber = bookIndex + 1;
+        const filePath = bookFiles[bookIndex];
+        
+        try {
+          updateProgress(`Reading Book ${bookNumber}...`);
+          const bookText = await readBookFile(filePath);
+          const chunks = chunkText(bookText);
+          
+          updateProgress(`Book ${bookNumber}: Created ${chunks.length} chunks`);
+          
+          // Add all chunks for this book to the processing queue
+          for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+            allChunkRequests.push({
+              book: bookNumber,
+              chunkIndex: chunkIndex,
+              chunkText: chunks[chunkIndex]
+            });
+          }
+        } catch (error) {
+          console.error(`Failed to read ${filePath}:`, error);
+          updateProgress(`❌ Failed to read Book ${bookNumber}: ${error.message}`);
+        }
+      }
+
+      const totalChunks = allChunkRequests.length;
+      let completedChunks = 0;
+      
+      updateProgress(`Processing ${totalChunks} chunks across ${bookFiles.length} books...`);
+
+      // Process in batches
+      const batchSize = 5;
+      for (let i = 0; i < allChunkRequests.length; i += batchSize) {
+        const batch = allChunkRequests.slice(i, i + batchSize);
         const batchNumber = Math.floor(i / batchSize) + 1;
-        const totalBatches = Math.ceil(allChapterRequests.length / batchSize);
+        const totalBatches = Math.ceil(allChunkRequests.length / batchSize);
 
-        updateProgress(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} chapters)...`);
+        updateProgress(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} chunks)...`);
 
         // Execute batch concurrently
-        const batchPromises = batch.map(({ book, chapter }) => makeApiCall(book, chapter));
+        const batchPromises = batch.map(({ book, chunkIndex, chunkText }) => 
+          makeApiCall(book, chunkIndex, chunkText)
+        );
         const batchResults = await Promise.allSettled(batchPromises);
 
         // Process batch results
         batchResults.forEach((result, index) => {
-          completedChapters++;
-          const { book, chapter } = batch[index];
+          completedChunks++;
+          const { book, chunkIndex } = batch[index];
 
           if (result.status === 'fulfilled' && result.value.success) {
             allResults.push(result.value.data);
@@ -203,32 +329,32 @@ For the specified book and chapter you need to state ALL remarks  and comments m
             const errorMessage = result.status === 'fulfilled'
               ? result.value.error
               : result.reason?.message || 'Unknown error';
-            failedChapters.push({ book, chapter, error: errorMessage });
-            console.error(`Failed to process book ${book}, chapter ${chapter}: ${errorMessage}`);
+            failedChunks.push({ book, chunkIndex, error: errorMessage });
+            console.error(`Failed to process book ${book}, chunk ${chunkIndex}: ${errorMessage}`);
           }
         });
 
-        updateProgress(`Completed ${completedChapters}/${totalChapters} chapters...`);
+        updateProgress(`Completed ${completedChunks}/${totalChunks} chunks...`);
 
         // Small delay between batches to be respectful to the API
-        if (i + batchSize < allChapterRequests.length) {
+        if (i + batchSize < allChunkRequests.length) {
           await new Promise(r => setTimeout(r, 1000));
         }
       }
 
-      // Group failed chapters by book for summary
+      // Group failed chunks by book for summary
       const failedByBook = {};
-      failedChapters.forEach(({ book, chapter, error }) => {
+      failedChunks.forEach(({ book, chunkIndex, error }) => {
         if (!failedByBook[book]) {
           failedByBook[book] = [];
         }
-        failedByBook[book].push({ chapter, error });
+        failedByBook[book].push({ chunkIndex, error });
       });
 
       return {
         results: allResults,
         failed: failedByBook,
-        totalFailed: failedChapters.length,
+        totalFailed: failedChunks.length,
         totalSuccess: allResults.length
       };
     }
@@ -260,29 +386,29 @@ For the specified book and chapter you need to state ALL remarks  and comments m
       });
 
       // Create summary message
-      let summary = `Done! Successfully processed ${extractionResults.totalSuccess} chapters.`;
+      let summary = `Done! Successfully processed ${extractionResults.totalSuccess} chunks.`;
       if (extractionResults.totalFailed > 0) {
-        summary += ` ${extractionResults.totalFailed} chapters failed.`;
+        summary += ` ${extractionResults.totalFailed} chunks failed.`;
       }
       progressEl.textContent = summary;
 
-      // Prepare output with results and failed chapters summary
+      // Prepare output with results and failed chunks summary
       let output = {
-        successful_chapters: extractionResults.results,
+        successful_chunks: extractionResults.results,
         summary: {
-          total_chapters: extractionResults.totalSuccess + extractionResults.totalFailed,
+          total_chunks: extractionResults.totalSuccess + extractionResults.totalFailed,
           successful: extractionResults.totalSuccess,
           failed: extractionResults.totalFailed
         }
       };
 
-      // Add failed chapters summary if there are any failures
+      // Add failed chunks summary if there are any failures
       if (extractionResults.totalFailed > 0) {
-        output.failed_chapters_by_book = {};
-        Object.entries(extractionResults.failed).forEach(([book, chapters]) => {
-          output.failed_chapters_by_book[`Book ${book}`] = {
-            failed_count: chapters.length,
-            chapters: chapters.map(ch => `Chapter ${ch.chapter}: ${ch.error}`)
+        output.failed_chunks_by_book = {};
+        Object.entries(extractionResults.failed).forEach(([book, chunks]) => {
+          output.failed_chunks_by_book[`Book ${book}`] = {
+            failed_count: chunks.length,
+            chunks: chunks.map(ch => `Chunk ${ch.chunkIndex}: ${ch.error}`)
           };
         });
       }
