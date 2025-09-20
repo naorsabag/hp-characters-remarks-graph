@@ -51,8 +51,23 @@
     </div>
   </div>
 
+  <div style="margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 6px; background-color: #f0f8ff;">
+    <label for="csvFile" style="display: block; margin-bottom: 8px; font-weight: bold;">Or Upload CSV for Sentiment Analysis:</label>
+    <input
+      type="file"
+      id="csvFile"
+      accept=".csv"
+      style="width: 100%; max-width: 500px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 8px;"
+    />
+    <div style="font-size: 12px; color: #666;">
+      CSV format: book,speaker,target,sentiment,description<br>
+      Example: 1,Vernon Dursley,Vernon Dursley,positive, Mr. and Mrs. Dursley are proud to be perfectly normal...
+    </div>
+  </div>
+
   <div id="progress">Waiting to start...</div>
   <button id="startBtn">Start Extraction</button>
+  <button id="analyzeSentimentBtn">Analyze Sentiment from CSV</button>
   <pre id="output"></pre>
 
   <script type="module">
@@ -81,7 +96,7 @@
       "Gwenog Jones", "Half-Blood Prince", "half-giants", "Harry Potter", "Harry Potter's friends",
       "Hedwig", "Errol", "Owl/s (with no specific name)", "Mr. Borgin", "Hepzibah Smith", "Hermione Granger", "Hestia Jones", "Hippogriffs", "Hogwarts",
       "Hokey (house-elf)", "Horace Slughorn", "Horcruxes", "House-elves", "Hufflepuff", "Humans",
-      "Igor Karkaroff", "Inferi", "Ireland", "James Potter", "Justin Finch-Fletchley",
+      "Igor Karkaroff", "Inferi", "Ireland", "James Potter", "Justin Finch-Fletchley", "Hogwarts committee",
       "Kendra Dumbledore", "Kingsley Shacklebolt", "Kreacher", "Lavender Brown", "Leaky Cauldron",
       "Lee Jordan", "Lily Potter", "Lucius Malfoy", "Ludo Bagman", "Luna Lovegood", "Madam Malkin",
       "Mandrakes", "Marcus Flint", "Marietta Edgecombe", "Mary Cattermole", "Masons", "McLaggen",
@@ -95,18 +110,19 @@
       "Petunia Dursley", "Piers Polkiss", "Pius Thicknesse", "police", "Pomona Sprout", "Professor Binns",
       "Potions textbook", "Quidditch", "Quirinus Quirrell", "Ravenclaw", "Reg Cattermole", "Madam Pince", "Madam Pomfrey",
       "Regulus Black", "Remus Lupin", "Rita Skeeter", "Roger Davies", "Rolanda Hooch", "Romilda Vane", "Professor Dippet",
-      "Ron Weasley", "Ronan", "Rubeus Hagrid", "Rufus Scrimgeour", "Sanguini (the vampire)", "Gnome",
-      "Scabior (Snatcher)", "Seamus Finnigan", "Severus Snape", "Sirius Black", "Slughorn",
-      "Slytherin", "Snake", "Snatchers", "Sorting Hat", "spiders", "Squibs", "Stan Shunpike",
-      "start-of-term banquet", "Students", "Susan Bones", "Sybill Trelawney", "target", "Terry Boot",
-      "the cave", "The Daily Prophet", "the Dark Mark", "The Death Eaters", "The Deathly Hallows",
-      "the Lestranges", "The Ministry", "the Mirror of Erised", "the monster in the Chamber",
+      "Ron Weasley", "Ronan", "Rubeus Hagrid", "Rufus Scrimgeour", "Sanguini (the vampire)", "Gnome", "Walden Macnair",
+      "Scabior (Snatcher)", "Seamus Finnigan", "Severus Snape", "Sirius Black", "Slughorn", "Sir Cadogan", "Madam Rosmerta",
+      "Slytherin", "Snake", "Snatchers", "Sorting Hat", "spiders", "Squibs", "Stan Shunpike", "Hannah Abbott",
+      "start-of-term banquet", "Students", "Susan Bones", "Sybill Trelawney", "target", "Terry Boot", "Amos Diggory",
+      "the cave", "The Daily Prophet", "the Dark Mark", "The Death Eaters", "The Deathly Hallows", "Katie Bell",
+      "the Lestranges", "The Ministry", "the Mirror of Erised", "the monster in the Chamber", "Dennis Creevey",
       "The Peverell family", "the potion", "The Prophecy", "The Quibbler", "staff",
-      "the Stone (Philosopher's Stone)", "students", "The Sword of Gryffindor",
+        "Monsieur Delacour", "Ted Tonks", "Auntie Muriel", "Elphias Doge",
+      "the Stone (Philosopher's Stone)", "students", "The Sword of Gryffindor", "Merope",
       "The Tale of the Three Brothers", "Thestrals", "third-floor corridor", "Tom (Leaky Cauldron landlord)",
-      "Triwizard Tournament", "Troll", "Unforgivable Curses", "Vampires", "Veela", "Viktor Krum",
-      "villagers", "Voldemort", "Wands", "Weather", "wedding guests", "Winky", "Wizards",
-      "Xenophilius Lovegood", "Yaxley", "Zacharias Smith", "other"
+      "Triwizard Tournament", "Troll", "Unforgivable Curses", "Vampires", "Veela", "Viktor Krum", "Leanne", "Gaunt",
+      "villagers", "Voldemort", "Wands", "Weather", "wedding guests", "Winky", "Wizards", "Phineas Nigellus",
+      "Xenophilius Lovegood", "Yaxley", "Zacharias Smith", "Morfin", "Marvolo", "Mrs. Cole", "other"
     ];
 
     // Function to read a book file from File object
@@ -115,6 +131,77 @@
         return await file.text();
       } catch (error) {
         console.error(`Error reading ${file.name}:`, error);
+        throw error;
+      }
+    }
+
+    // Function to parse CSV file and return array of objects
+    async function parseCSVFile(file) {
+      try {
+        const csvText = await file.text();
+        const lines = csvText.trim().split('\n');
+
+        if (lines.length < 2) {
+          throw new Error('CSV file must have at least a header row and one data row');
+        }
+
+        // Parse header
+        const header = lines[0].split(',').map(col => col.trim());
+        const expectedHeaders = ['book', 'speaker', 'target', 'sentiment', 'description'];
+
+        // Validate headers
+        const hasRequiredHeaders = expectedHeaders.every(reqHeader =>
+          header.some(h => h.toLowerCase() === reqHeader.toLowerCase())
+        );
+
+        if (!hasRequiredHeaders) {
+          throw new Error(`CSV must have headers: ${expectedHeaders.join(', ')}`);
+        }
+
+        // Parse data rows
+        const data = [];
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (!line) continue; // Skip empty lines
+
+          // Simple CSV parsing - handles basic cases
+          // For production, consider using a proper CSV parser library
+          const values = [];
+          let current = '';
+          let inQuotes = false;
+
+          for (let j = 0; j < line.length; j++) {
+            const char = line[j];
+            if (char === '"' && (j === 0 || line[j-1] === ',')) {
+              inQuotes = true;
+            } else if (char === '"' && inQuotes && (j === line.length - 1 || line[j+1] === ',')) {
+              inQuotes = false;
+            } else if (char === ',' && !inQuotes) {
+              values.push(current.trim());
+              current = '';
+            } else {
+              current += char;
+            }
+          }
+          values.push(current.trim()); // Add the last value
+
+          if (values.length !== header.length) {
+            console.warn(`Row ${i + 1} has ${values.length} values but header has ${header.length} columns. Skipping row.`);
+            continue;
+          }
+
+          // Create object with header mapping
+          const rowObject = {};
+          header.forEach((col, index) => {
+            rowObject[col.toLowerCase()] = values[index];
+          });
+
+          data.push(rowObject);
+        }
+
+        return data;
+      } catch (error) {
+        console.error(`Error parsing CSV file ${file.name}:`, error);
         throw error;
       }
     }
@@ -279,6 +366,111 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
       } catch (err) {
         console.error(`API call failed for book ${book}, chunk ${chunkIndex}:`, err);
         return { success: false, error: err.message, book, chunkIndex };
+      }
+    }
+
+    async function makeSentimentAnalysisCall(batchData, batchIndex) {
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Request timeout after 30 seconds')), 30000);
+      });
+
+      const apiCallPromise = async () => {
+        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${getApiKey()}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "gpt-4o",
+            messages: [
+              {
+                role: "system",
+                content: `
+You are an expert sentiment analyzer. You will analyze a batch of remarks/comments and determine the sentiment of each speaker towards their target.
+
+For each item in the batch:
+- Analyze the description to understand what the speaker said or thought about or to the target
+- Determine if the sentiment is positive, negative, or neutral
+- Consider the context and tone of the remark
+
+Return the analysis for all items in the batch with the corrected sentiment values.`
+              },
+              {
+                role: "user",
+                content: `Analyze the sentiment for each of these ${batchData.length} remarks (Batch ${batchIndex}):
+
+${batchData.map((item, index) => `
+Item ${index}:
+Speaker: ${item.speaker}
+Target: ${item.target}
+Description: ${item.description}
+`).join('\n')}
+
+Please return batch_index as ${batchIndex} and use item_index values 0 to ${batchData.length - 1} corresponding to the items above.`
+              }
+            ],
+            temperature: 0,
+            response_format: {
+              type: "json_schema",
+              json_schema: {
+                name: "sentiment_analysis_schema",
+                strict: true,
+                schema: {
+                  type: "object",
+                  properties: {
+                    batch_index: {
+                      type: "integer"
+                    },
+                    analyzed_items: {
+                      type: "array",
+                      description: "Analysis results for each item in the batch",
+                      items: {
+                        type: "object",
+                        properties: {
+                          item_index: {
+                            type: "integer",
+                            description: "The index of this item within the batch (0-based)"
+                          },
+                          new_sentiment: {
+                            type: "string",
+                            enum: ["positive", "negative", "neutral"],
+                            description: "Does the speaker said/though something positive, neutral or negative about the target"
+                          },
+                          reasoning: {
+                            type: "string",
+                            description: "Brief explanation for the sentiment classification"
+                          }
+                        },
+                        required: ["item_index", "new_sentiment",  "reasoning"],
+                        additionalProperties: false
+                      }
+                    }
+                  },
+                  required: ["batch_index", "analyzed_items"],
+                  additionalProperties: false
+                }
+              }
+            }
+          })
+        });
+
+        const completion = await response.json();
+
+        try {
+          const parsed = JSON.parse(completion.choices[0].message.content);
+          return { success: true, data: parsed, batchIndex };
+        } catch (err) {
+          console.error(`Failed to parse JSON for sentiment batch ${batchIndex}:`, err);
+          return { success: false, error: `Parse error: ${err.message}`, batchIndex };
+        }
+      };
+
+      try {
+        return await Promise.race([apiCallPromise(), timeoutPromise]);
+      } catch (err) {
+        console.error(`Sentiment analysis API call failed for batch ${batchIndex}:`, err);
+        return { success: false, error: err.message, batchIndex };
       }
     }
 
@@ -480,7 +672,7 @@ Return a mapping where each original name maps to an array of valid character na
         try {
           updateProgress(`Reading ${file.name}...`);
           const bookText = await readBookFile(file);
-          const chunks = chunkText(bookText);
+          const chunks = chunkText(bookText).filter((c,i) => [1, 142].includes(i));
 
           updateProgress(`${file.name}: Created ${chunks.length} chunks`);
 
@@ -638,6 +830,130 @@ Return a mapping where each original name maps to an array of valid character na
       };
     }
 
+    async function analyzeSentimentFromCSV(updateProgress) {
+      const csvFileInput = document.getElementById('csvFile');
+
+      if (!csvFileInput.files.length) {
+        throw new Error('Please select a CSV file first.');
+      }
+
+      const csvFile = csvFileInput.files[0];
+      updateProgress(`Reading CSV file: ${csvFile.name}...`);
+
+      // Parse CSV file
+      const csvData = await parseCSVFile(csvFile);
+      updateProgress(`Parsed ${csvData.length} rows from CSV file`);
+
+      if (csvData.length === 0) {
+        throw new Error('No data rows found in CSV file');
+      }
+
+      // Process in batches
+      const batchSize = 20; // Larger batches since we're not processing huge text chunks
+      const maxParallelBatches = 5; // Maximum number of batches to process in parallel
+      let allResults = [];
+      let failedBatches = [];
+      const totalBatches = Math.ceil(csvData.length / batchSize);
+      let completedBatches = 0;
+
+      updateProgress(`Processing ${csvData.length} items in ${totalBatches} batches (max ${maxParallelBatches} parallel)...`);
+
+      // Create all batch requests
+      const allBatchRequests = [];
+      for (let i = 0; i < csvData.length; i += batchSize) {
+        const batch = csvData.slice(i, i + batchSize);
+        const batchIndex = Math.floor(i / batchSize);
+        allBatchRequests.push({ batch, batchIndex });
+      }
+
+      // Process batches in parallel groups
+      for (let i = 0; i < allBatchRequests.length; i += maxParallelBatches) {
+        const parallelBatches = allBatchRequests.slice(i, i + maxParallelBatches);
+        const groupNumber = Math.floor(i / maxParallelBatches) + 1;
+        const totalGroups = Math.ceil(allBatchRequests.length / maxParallelBatches);
+
+        updateProgress(`Processing batch group ${groupNumber}/${totalGroups} (${parallelBatches.length} batches in parallel)...`);
+
+        // Execute batches in parallel
+        const batchPromises = parallelBatches.map(({ batch, batchIndex }) =>
+          makeSentimentAnalysisCall(batch, batchIndex)
+        );
+        const batchResults = await Promise.allSettled(batchPromises);
+
+        // Process results
+        for (let j = 0; j < batchResults.length; j++) {
+          completedBatches++;
+          const result = batchResults[j];
+          const { batch, batchIndex } = parallelBatches[j];
+
+          if (result.status === 'fulfilled' && result.value.success) {
+            allResults.push(result.value.data);
+            updateProgress(`✅ Completed batch ${batchIndex + 1}/${totalBatches} in group ${groupNumber}`);
+          } else {
+            const errorMessage = result.status === 'fulfilled'
+              ? result.value.error
+              : result.reason?.message || 'Unknown error';
+            failedBatches.push({ batchIndex, batch, error: errorMessage });
+            updateProgress(`❌ Failed batch ${batchIndex + 1}/${totalBatches}: ${errorMessage}`);
+          }
+        }
+
+        updateProgress(`Completed group ${groupNumber}/${totalGroups} - ${completedBatches}/${totalBatches} batches processed`);
+
+        // Small delay between parallel groups to be respectful to the API
+        if (i + maxParallelBatches < allBatchRequests.length) {
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+
+      // Retry failed batches one by one
+      let retriedBatches = [];
+      let remainingFailures = [];
+
+      if (failedBatches.length > 0) {
+        updateProgress(`Retrying ${failedBatches.length} failed batches...`);
+
+        for (let i = 0; i < failedBatches.length; i++) {
+          const { batchIndex, batch, error } = failedBatches[i];
+
+          updateProgress(`Retrying ${i + 1}/${failedBatches.length}: Batch ${batchIndex}...`);
+
+          try {
+            const retryResult = await makeSentimentAnalysisCall(batch, batchIndex);
+
+            if (retryResult.success) {
+              allResults.push(retryResult.data);
+              retriedBatches.push({ batchIndex });
+              updateProgress(`✅ Retry successful: Batch ${batchIndex}`);
+            } else {
+              remainingFailures.push({ batchIndex, batch, error: retryResult.error });
+              updateProgress(`❌ Retry failed: Batch ${batchIndex} - ${retryResult.error}`);
+            }
+          } catch (retryError) {
+            remainingFailures.push({ batchIndex, batch, error: retryError.message });
+            updateProgress(`❌ Retry failed: Batch ${batchIndex} - ${retryError.message}`);
+          }
+
+          // Add a delay between retry attempts
+          if (i < failedBatches.length - 1) {
+            await new Promise(r => setTimeout(r, 2000));
+          }
+        }
+      }
+
+      return {
+        results: allResults,
+        originalData: csvData, // Include original CSV data for reference
+        totalItems: csvData.length,
+        totalBatches: totalBatches,
+        successfulBatches: allResults.length,
+        originalFailures: failedBatches.length,
+        retriedSuccess: retriedBatches.length,
+        remainingFailures: remainingFailures.length,
+        failedBatches: remainingFailures
+      };
+    }
+
     document.getElementById("startBtn").addEventListener("click", async () => {
       const progressEl = document.getElementById("progress");
       const outputEl = document.getElementById("output");
@@ -726,6 +1042,130 @@ Return a mapping where each original name maps to an array of valid character na
         progressEl.textContent = `❌ Error: ${error.message}`;
         progressEl.style.color = "red";
         console.error('Extraction error:', error);
+      }
+    });
+
+    document.getElementById("analyzeSentimentBtn").addEventListener("click", async () => {
+      const progressEl = document.getElementById("progress");
+      const outputEl = document.getElementById("output");
+      const apiKey = getApiKey();
+
+      // Validate inputs
+      if (!apiKey) {
+        progressEl.textContent = "❌ Please enter your OpenAI API key before starting sentiment analysis.";
+        progressEl.style.color = "red";
+        return;
+      }
+
+      if (!apiKey.startsWith('sk-')) {
+        progressEl.textContent = "❌ Invalid API key format. OpenAI API keys start with 'sk-'.";
+        progressEl.style.color = "red";
+        return;
+      }
+
+      const csvFileInput = document.getElementById('csvFile');
+      if (csvFileInput.files.length === 0) {
+        progressEl.textContent = "❌ Please select a CSV file before starting sentiment analysis.";
+        progressEl.style.color = "red";
+        return;
+      }
+
+      // Reset progress color
+      progressEl.style.color = "";
+      progressEl.textContent = "Starting sentiment analysis...";
+
+      try {
+        const analysisResults = await analyzeSentimentFromCSV(msg => {
+          progressEl.textContent = msg;
+        });
+
+        // Create summary message (will be updated after processing)
+        let summary = `Processing complete! Preparing results...`;
+        progressEl.textContent = summary;
+
+        // Create CSV-like output with original data plus new sentiment column
+        const csvResults = [...analysisResults.originalData]; // Start with all original items
+
+        // Create a map to track which items have been processed
+        const processedItems = new Map();
+
+        // Process all successfully analyzed items
+        analysisResults.results.forEach(batchResult => {
+          batchResult.analyzed_items.forEach(item => {
+            // Calculate the correct global index for this item
+            const globalIndex = batchResult.batch_index * 20 + item.item_index;
+            processedItems.set(globalIndex, {
+              new_sentiment: item.new_sentiment,
+              reasoning: item.reasoning
+            });
+          });
+        });
+
+        // Apply the analysis results to the corresponding original items
+        csvResults.forEach((originalItem, index) => {
+          if (processedItems.has(index)) {
+            const analysisResult = processedItems.get(index);
+            originalItem.new_sentiment = analysisResult.new_sentiment;
+            originalItem.reasoning = analysisResult.reasoning;
+          } else {
+            // Item wasn't processed (likely due to batch failure)
+            originalItem.new_sentiment = "";
+            originalItem.reasoning = "Not processed due to batch failure";
+          }
+        });
+
+        // Count processed vs unprocessed items
+        const processedCount = csvResults.filter(item => item.new_sentiment && item.new_sentiment !== "").length;
+        const unprocessedCount = csvResults.filter(item => !item.new_sentiment || item.new_sentiment === "").length;
+
+        // Prepare output
+        let output = {
+          csv_results: csvResults,
+          summary: {
+            total_items: analysisResults.totalItems,
+            processed_items: processedCount,
+            unprocessed_items: unprocessedCount,
+            total_batches: analysisResults.totalBatches,
+            successful_batches: analysisResults.successfulBatches,
+            original_failures: analysisResults.originalFailures,
+            retried_successes: analysisResults.retriedSuccess,
+            remaining_failures: analysisResults.remainingFailures
+          },
+          csv_headers: ["book", "speaker", "target", "sentiment", "description", "new_sentiment", "reasoning"]
+        };
+
+        // Add failed batches information if there are remaining failures
+        if (analysisResults.remainingFailures > 0) {
+          output.failed_batches = analysisResults.failedBatches.map(fb => ({
+            batch_index: fb.batchIndex,
+            error: fb.error,
+            items_count: fb.batch.length
+          }));
+        }
+
+        outputEl.textContent = JSON.stringify(output, null, 2);
+
+        // Update final summary message
+        const finalProcessedCount = output.summary.processed_items;
+        const finalUnprocessedCount = output.summary.unprocessed_items;
+        const totalCount = output.summary.total_items;
+
+        let finalSummary = `Done! Successfully analyzed ${finalProcessedCount}/${totalCount} items.`;
+        if (finalUnprocessedCount > 0) {
+          finalSummary += ` ${finalUnprocessedCount} items could not be processed due to batch failures.`;
+        }
+        if (analysisResults.originalFailures > 0) {
+          finalSummary += ` (Originally ${analysisResults.originalFailures} batches failed`;
+          if (analysisResults.retriedSuccess > 0) {
+            finalSummary += `, ${analysisResults.retriedSuccess} successfully retried`;
+          }
+          finalSummary += `)`;
+        }
+        progressEl.textContent = finalSummary;
+      } catch (error) {
+        progressEl.textContent = `❌ Error: ${error.message}`;
+        progressEl.style.color = "red";
+        console.error('Sentiment analysis error:', error);
       }
     });
   </script>
