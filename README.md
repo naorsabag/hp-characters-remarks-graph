@@ -90,7 +90,7 @@ If you want to extract data from your own Harry Potter text files:
    - Wait for processing (creates speaker and target graph data)
 
 4. **View the results:**
-   - Open generated `hp_remarks_graph.html` in your browser
+   - Open generated `index.html` in your browser
    - Explore the interactive visualization!
 
 ## Understanding the Visualization
@@ -131,8 +131,9 @@ If you want to extract data from your own Harry Potter text files:
 hp-characters-remarks-graph/
 ├── remarks_extractor.html       # Web-based text extraction tool
 ├── graph_builder.ipynb          # Jupyter notebook for visualization
+├── character_names.json         # Standardized character names database
 ├── hp-dialogues.csv            # Sample dialogue data (24K+ entries)
-├── hp_remarks_graph.html       # Generated interactive graph
+├── index.html                  # Generated interactive graph
 ├── books/                      # Directory for book text files
 │   ├── Book1.txt              # (you provide these)
 │   ├── Book2.txt
@@ -168,12 +169,14 @@ book,speaker,target,sentiment,description
 ```
 
 ### Expected Character Names
-The system recognizes 188+ standardized character names including:
-- Main characters: `Harry Potter`, `Hermione Granger`, `Ron Weasley`
-- Professors: `Albus Dumbledore`, `Severus Snape`, `Minerva McGonagall`
-- Families: `Vernon Dursley`, `Molly Weasley`, `Lucius Malfoy`
-- Groups: `Death Eaters`, `Order of the Phoenix`, `Students`
-- And many more...
+The system recognizes 260+ standardized character names loaded from `character_names.json`, including:
+- **Main characters**: `Harry Potter`, `Hermione Granger`, `Ron Weasley`
+- **Professors**: `Albus Dumbledore`, `Severus Snape`, `Minerva McGonagall`
+- **Families**: `Vernon Dursley`, `Molly Weasley`, `Lucius Malfoy`
+- **Groups**: `Death Eaters`, `Order of the Phoenix`, `Students`
+- **Creatures**: `Dobby`, `Buckbeak`, `Hedwig`, `Crookshanks`
+- **Places/Objects**: `Hogwarts`, `Ministry of Magic`, `Sorting Hat`
+- **And many more** - see `character_names.json` for the complete list
 
 ## Troubleshooting
 
@@ -181,7 +184,8 @@ The system recognizes 188+ standardized character names including:
 1. **API Key Problems**: Ensure key starts with `sk-` and has sufficient credits
 2. **File Upload Issues**: Use `.txt` files only, ensure proper encoding
 3. **Processing Failures**: Check console for detailed error messages
-4. **Character Name Issues**: Review the standardized character list
+4. **Character Names File Missing**: Ensure `character_names.json` is in the same directory as the extractor
+5. **Character Name Issues**: Check the browser console for character loading errors
 
 ### Graph Builder Issues
 1. **Missing CSV**: Ensure `hp-dialogues.csv` is in the same directory
@@ -205,22 +209,13 @@ colors = {'positive': {...}, ...}  # Color scheme
 ```
 
 ### Character Recognition
-Edit the `validCharacters` array in `remarks_extractor.html` to add new character names.
+The system uses a standardized database of character names stored in `character_names.json`. This file contains:
+- **260+ character names** organized in a structured format
+- **Automatic loading** by the remarks extractor on page load
+- **Fallback handling** if the file cannot be loaded
+- **Easy maintenance** - simply edit the JSON file to add/modify character names
 
-## Sample Outputs
-
-The visualization reveals fascinating insights:
-- **Most talkative characters** (largest nodes in Speaker mode)
-- **Most discussed characters** (largest nodes in Target mode)
-- **Relationship sentiments** (edge colors show positive/negative dynamics)
-- **Character clusters** (groups that talk among themselves)
-- **Sentiment patterns** (which characters tend to be positive/negative)
-
-## API Costs
-
-Using OpenAI GPT-4o for extraction:
-- **~$0.10-0.30 per book** depending on length
-- **Batch processing** minimizes costs
-- **Retry logic** prevents wasted calls on failures
-
-Enjoy exploring the magical world of Harry Potter character interactions! ⚡
+To customize character names:
+1. Edit `character_names.json`
+2. Add new names to the `character_names` array
+3. The extractor will automatically use the updated list on next page load
