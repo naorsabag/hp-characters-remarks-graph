@@ -1,194 +1,226 @@
 # Harry Potter Characters Remarks Graph
 
-An interactive network visualization tool that analyzes dialogues and remarks between Harry Potter characters, showing their relationships through sentiment analysis and conversation patterns.
+A complete toolkit for extracting, analyzing, and visualizing character relationships in Harry Potter through dialogue analysis and sentiment visualization.
 
 ## What This Project Does
 
-This project creates an interactive network graph from Harry Potter dialogue data that:
+This project provides two powerful tools that work together to create interactive network graphs from Harry Potter text:
 
-- **Visualizes character relationships** based on who talks to/about whom
-- **Analyzes sentiment** of conversations (positive, negative, neutral)  
-- **Shows conversation patterns** through node sizes and edge weights
+### 🔍 **Remarks Extractor** (`remarks_extractor.html`)
+A sophisticated web application that:
+- **Extracts character dialogue** from raw Harry Potter book text files using OpenAI GPT-4
+- **Identifies speaker-target relationships** including thoughts, behind-the-back remarks, and indirect comments
+- **Performs sentiment analysis** on existing CSV data with AI-powered classification
+- **Maps character names** to a standardized vocabulary (188+ recognized characters)
+- **Handles large text processing** with intelligent chunking and retry mechanisms
+- **Outputs structured CSV data** ready for visualization
+
+### 📊 **Graph Builder** (`graph_builder.ipynb`)
+A Jupyter notebook that:
+- **Creates interactive network visualizations** from dialogue CSV data
 - **Provides dual viewing modes:**
-  - **Speaker Mode**: Shows who speaks the most and their sentiment patterns
-  - **Target Mode**: Shows who receives the most remarks and their sentiment patterns
-- **Generates an interactive HTML visualization** with filtering capabilities
+  - **Speaker Mode**: Shows who speaks the most and their outgoing sentiment patterns
+  - **Target Mode**: Shows who receives the most remarks and their incoming sentiment patterns
+- **Visualizes relationships** through color-coded sentiment analysis
+- **Offers advanced filtering** with searchable character lists
+- **Generates self-contained HTML** with rich interactivity
+
+## Complete Workflow
+
+### Option 1: Extract Your Own Data (Full Pipeline)
+1. **Get Harry Potter text files** (Book1.txt, Book2.txt, etc.)
+2. **Use Remarks Extractor** to extract dialogue data
+3. **Use Graph Builder** to create interactive visualizations
+
+### Option 2: Use Existing Data (Visualization Only)
+1. **Start with CSV data** (`hp-dialogues.csv` is included)
+2. **Use Graph Builder** to create interactive visualizations
 
 ## Requirements
 
-### Software Requirements
+### For Remarks Extractor
+- **Modern web browser** with JavaScript enabled
+- **OpenAI API key** (requires paid OpenAI account)
+- **Harry Potter book text files** (`.txt` format)
+- **Optional**: Existing CSV file for sentiment re-analysis
+
+### For Graph Builder
 - **Python 3.7+** with Jupyter Notebook support
 - **Required Python packages:**
-  - `pandas` - for data manipulation
-  - `networkx` - for graph processing  
-  - `pyvis` - for interactive network visualization
-  - `pathlib` - for file handling (built-in)
-  - `json` - for data serialization (built-in)
+  - `pandas` - data manipulation
+  - `networkx` - graph processing  
+  - `pyvis` - interactive network visualization
+  - `pathlib`, `json` - built-in Python modules
 
-### Data Requirements
-- A CSV file named `hp-dialogues - Sheet1.csv` with the following columns:
-  - `speaker` - Character who speaks
-  - `target` - Character being spoken to/about
-  - `sentiment` - Sentiment of the remark ("positive", "negative", or "neutral")
+## Getting Started
 
-## How to Run
+### Step 1: Extract Character Remarks (Optional)
 
-### Step 1: Set Up Your Environment
+If you want to extract data from your own Harry Potter text files:
 
-**Option A: Using Jupyter Notebook**
-```bash
-# Install Jupyter if you don't have it
-pip install jupyter notebook
+1. **Open `remarks_extractor.html`** in your web browser
+2. **Enter your OpenAI API key** (stored locally, never transmitted)
+3. **Upload Harry Potter book files** (Book1.txt through Book7.txt)
+4. **Click "Start Extraction"** and wait for processing
+5. **Save the output JSON** and convert to CSV format
 
-# Install required packages (or let the notebook install them)
-pip install pandas networkx pyvis
-```
+**For existing CSV sentiment analysis:**
+1. Upload your CSV file with columns: `book`, `speaker`, `target`, `sentiment`, `description`
+2. Click "Analyze Sentiment from CSV"
+3. Save the enhanced results
 
-**Option B: Using JupyterLab**
-```bash
-# Install JupyterLab
-pip install jupyterlab
+### Step 2: Create Interactive Visualization
 
-# Install required packages
-pip install pandas networkx pyvis
-```
-
-**Option C: Using Google Colab**
-- Upload the notebook to Google Colab
-- Upload your CSV data file
-- Run the cells (dependencies will be installed automatically)
-
-### Step 2: Prepare Your Data
-
-Ensure you have a CSV file named `hp-dialogues - Sheet1.csv` in the same directory as the notebook. The CSV should have this structure:
-
-```csv
-speaker,target,sentiment
-Harry Potter,Hermione Granger,positive
-Hermione Granger,Harry Potter,neutral
-Draco Malfoy,Harry Potter,negative
-...
-```
-
-### Step 3: Run the Notebook
-
-1. **Start Jupyter:**
+1. **Set up Python environment:**
    ```bash
-   # For Jupyter Notebook
-   jupyter notebook
+   # Install Jupyter
+   pip install jupyter pandas networkx pyvis
    
-   # For JupyterLab  
-   jupyter lab
+   # Start Jupyter
+   jupyter notebook  # or jupyter lab
    ```
 
-2. **Open the notebook:**
-   - Navigate to `graph_builder.ipynb`
-   - Click to open it
+2. **Prepare your data:**
+   - Ensure you have `hp-dialogues.csv` in the project directory
+   - CSV should have columns: `speaker`, `target`, `sentiment`
 
-3. **Run all cells:**
-   - **Cell 1**: Installs the `pyvis` package
-   - **Cell 2**: Imports required libraries
-   - **Cell 3**: Processes the data and generates the visualization
-   
-   You can run cells individually with `Shift + Enter` or run all cells with `Cell > Run All`
+3. **Run the notebook:**
+   - Open `graph_builder.ipynb`
+   - Run all cells (or `Cell > Run All`)
+   - Wait for processing (creates speaker and target graph data)
 
-### Step 4: View the Results
-
-After running the notebook, you'll get:
-- **An HTML file**: `hp_conversation_graph_toggle.html`
-- **Console output**: "✔ Done! Open 'hp_conversation_graph_toggle.html' in your browser."
-
-Open the HTML file in any web browser to interact with your graph!
+4. **View the results:**
+   - Open generated `hp_remarks_graph.html` in your browser
+   - Explore the interactive visualization!
 
 ## Understanding the Visualization
 
 ### Graph Elements
 
 **Nodes (Characters):**
-- **Size**: Represents the number of remarks (spoken in Speaker mode, received in Target mode)
-- **Color**: Represents overall sentiment ratio
-  - More **green** = more positive remarks
-  - More **red** = more negative remarks
-  - **Gray/purple** = neutral/mixed remarks
+- **Size**: Number of remarks (spoken in Speaker mode, received in Target mode)
+- **Color**: Sentiment mix using weighted color blending:
+  - **Green** tones: More positive remarks
+  - **Red** tones: More negative remarks
+  - **Gray** tones: Neutral/balanced remarks
 
 **Edges (Relationships):**
-- **Thickness**: Number of remarks between characters
-- **Color**: Overall sentiment of the relationship
-  - **Green** (#2ED573): Positive
-  - **Red** (#FF4757): Negative  
-  - **Gray** (#747D8C): Neutral
+- **Thickness**: Total number of remarks between characters
+- **Color**: Sentiment mix of the relationship using same color scheme
+- **Direction**: Arrow shows speaker → target relationship
 
 ### Interactive Features
 
 **Viewing Modes:**
-- **Speaker Graph**: Focus on who speaks and their outgoing relationships
-- **Target Graph**: Focus on who receives remarks and their incoming relationships
+- **Speaker Graph**: Focus on who makes remarks (outgoing relationships)
+- **Target Graph**: Focus on who receives remarks (incoming relationships)
 
-**Controls:**
-- **Click a node**: Highlight only that character's connections
-- **Double-click background**: Reset to show all connections
-- **Hide/Show Edges**: Toggle edge visibility
-- **Hover over elements**: See detailed information
+**Advanced Controls:**
+- **Character Filtering**: Searchable dropdown menus for speakers and targets
+- **Smart Filtering Logic**:
+  - Select speakers only → shows all their outgoing edges
+  - Select targets only → shows all their incoming edges  
+  - Select both → shows only edges FROM selected speakers TO selected targets
+- **Node Interaction**: Click nodes to highlight their connections
+- **Edge Toggle**: Hide/show all edges for better node visibility
+- **Reset**: Double-click background to reset all filters
 
 ## File Structure
 
 ```
 hp-characters-remarks-graph/
-├── graph_builder.ipynb          # Main Jupyter notebook
-├── hp-dialogues - Sheet1.csv    # Your dialogue data (you provide this)
-├── hp_conversation_graph_toggle.html  # Generated interactive graph
-└── README.md                    # This file
+├── remarks_extractor.html       # Web-based text extraction tool
+├── graph_builder.ipynb          # Jupyter notebook for visualization
+├── hp-dialogues.csv            # Sample dialogue data (24K+ entries)
+├── hp_remarks_graph.html       # Generated interactive graph
+├── books/                      # Directory for book text files
+│   ├── Book1.txt              # (you provide these)
+│   ├── Book2.txt
+│   └── ...
+└── README.md                   # This file
 ```
+
+## Advanced Features
+
+### Remarks Extractor Capabilities
+- **Intelligent text chunking** (1000 words per chunk with paragraph boundaries)
+- **Context continuity** (provides previous chunk context for better analysis)
+- **Character name standardization** (maps variants to 188 standardized names)
+- **Batch processing** with concurrent API calls
+- **Automatic retry logic** for failed chunks
+- **Progress tracking** with detailed status updates
+
+### Graph Builder Features
+- **Weighted color mixing** for nuanced sentiment representation
+- **Fixed graph layout** using NetworkX spring layout (reproducible)
+- **Responsive filtering** with real-time search
+- **Tooltip information** showing detailed statistics
+- **Cross-browser compatibility** (self-contained HTML/CSS/JS)
+
+## Data Format
+
+### Input CSV Format
+```csv
+book,speaker,target,sentiment,description
+1,Harry Potter,Ron Weasley,positive,"Harry complimented Ron's chess skills"
+1,Hermione Granger,Harry Potter,neutral,"Hermione explained the homework assignment"
+2,Draco Malfoy,Hermione Granger,negative,"Draco called Hermione a mudblood"
+```
+
+### Expected Character Names
+The system recognizes 188+ standardized character names including:
+- Main characters: `Harry Potter`, `Hermione Granger`, `Ron Weasley`
+- Professors: `Albus Dumbledore`, `Severus Snape`, `Minerva McGonagall`
+- Families: `Vernon Dursley`, `Molly Weasley`, `Lucius Malfoy`
+- Groups: `Death Eaters`, `Order of the Phoenix`, `Students`
+- And many more...
 
 ## Troubleshooting
 
-**Common Issues:**
+### Remarks Extractor Issues
+1. **API Key Problems**: Ensure key starts with `sk-` and has sufficient credits
+2. **File Upload Issues**: Use `.txt` files only, ensure proper encoding
+3. **Processing Failures**: Check console for detailed error messages
+4. **Character Name Issues**: Review the standardized character list
 
-1. **"FileNotFoundError: hp-dialogues - Sheet1.csv"**
-   - Make sure your CSV file is in the same directory as the notebook
-   - Check the filename exactly matches (including spaces and capitalization)
+### Graph Builder Issues
+1. **Missing CSV**: Ensure `hp-dialogues.csv` is in the same directory
+2. **Module Errors**: Install required packages: `pip install pandas networkx pyvis`
+3. **Empty Graph**: Check CSV format and column names
+4. **Browser Issues**: Try different browsers, ensure JavaScript is enabled
 
-2. **"ModuleNotFoundError: No module named 'pyvis'"**  
-   - Run the first cell to install pyvis, or install manually: `pip install pyvis`
-
-3. **Empty or broken graph**
-   - Check your CSV data format and column names
-   - Ensure you have data with the required columns: `speaker`, `target`, `sentiment`
-
-4. **Graph doesn't display properly**
-   - Try opening the HTML file in a different browser
-   - Ensure JavaScript is enabled in your browser
+### Performance Tips
+- **Large datasets**: Consider filtering data before visualization
+- **API costs**: Monitor OpenAI usage when extracting from books
+- **Memory usage**: Close other applications when processing large text files
 
 ## Customization
 
-You can modify the notebook to:
-- **Change input filename**: Edit the `INPUT_CSV` variable
-- **Adjust graph layout**: Modify the `nx.spring_layout` parameters
-- **Change colors**: Update the `EDGE_COLORS` dictionary
-- **Adjust node/edge sizing**: Modify the size calculation formulas
-- **Add more sentiment categories**: Extend the sentiment processing logic
-
-## Example Data Format
-
-Your CSV should look like this:
-
-```csv
-speaker,target,sentiment
-Harry Potter,Ron Weasley,positive
-Harry Potter,Hermione Granger,positive
-Draco Malfoy,Harry Potter,negative
-Severus Snape,Harry Potter,negative
-Hermione Granger,Ron Weasley,neutral
-Hagrid,Harry Potter,positive
-Voldemort,Harry Potter,negative
+### Graph Appearance
+```python
+# In graph_builder.ipynb, modify these settings:
+min_size, max_size = 10, 50        # Node size range
+k=5.0, iterations=150              # Layout parameters
+colors = {'positive': {...}, ...}  # Color scheme
 ```
 
-## Output
+### Character Recognition
+Edit the `validCharacters` array in `remarks_extractor.html` to add new character names.
 
-The generated HTML file is completely self-contained and can be:
-- Opened in any modern web browser
-- Shared with others (no dependencies needed)
-- Embedded in websites or presentations
-- Used for interactive exploration of character relationships
+## Sample Outputs
+
+The visualization reveals fascinating insights:
+- **Most talkative characters** (largest nodes in Speaker mode)
+- **Most discussed characters** (largest nodes in Target mode)
+- **Relationship sentiments** (edge colors show positive/negative dynamics)
+- **Character clusters** (groups that talk among themselves)
+- **Sentiment patterns** (which characters tend to be positive/negative)
+
+## API Costs
+
+Using OpenAI GPT-4o for extraction:
+- **~$0.10-0.30 per book** depending on length
+- **Batch processing** minimizes costs
+- **Retry logic** prevents wasted calls on failures
 
 Enjoy exploring the magical world of Harry Potter character interactions! ⚡
