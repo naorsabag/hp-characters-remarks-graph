@@ -75,7 +75,11 @@
     />
     <div style="font-size: 12px; color: #666;">
       Alternative workflow: If you already have extracted remarks from the books, upload the JSON file here for sentiment analysis.<br>
-      <strong>Required format:</strong> JSON output from the remarks extraction process (with successful_chunks structure)<br>
+      <strong>Supported formats:</strong> 
+      <ul style="margin: 5px 0; padding-left: 20px;">
+        <li>New format: JSON with "chunks" array (flat list of chunks)</li>
+        <li>Old format: JSON with "successful_chunks" nested structure (backward compatibility)</li>
+      </ul>
       The JSON should contain extracted remarks with character_name, target, description, and chunk_text for each remark.
     </div>
   </div>
@@ -83,7 +87,7 @@
   <div id="progress">Waiting to start...</div>
   <button id="startBtn">Extract Remarks from Books</button>
   <button id="analyzeSentimentBtn">Analyze Sentiment from Data</button>
-  
+
   <!-- Download button - initially hidden -->
   <div id="downloadSection" style="margin: 20px 0; padding: 15px; border: 1px solid #4CAF50; border-radius: 6px; background-color: #f8fff8; display: none;">
     <h3 style="margin-bottom: 10px; color: #2e7d32;">Download Results</h3>
@@ -92,17 +96,118 @@
     </div>
     <div id="downloadInfo" style="font-size: 12px; color: #666; margin-top: 8px;"></div>
   </div>
-  
+
   <pre id="output"></pre>
 
   <script type="module">
+    // System prompts
+    const REMARKS_EXTRACTION_SYSTEM_PROMPT = `
+You are an expert text analyzer. Analyze the provided Harry Potter text and extract ALL remarks and comments made by characters:
+- Read the entire text carefully, ensuring no comment or remarks is skipped.
+- Include remarks or comments made by any character mentioned in the text, not just the main ones.
+- Include remarks or comments made on any kind of group of people or animals or objects, for instance family, musicians, gingers, irish, cats, table....
+- Include remarks or comments made behind the back where the subject wasn't present.
+- Include remarks or comments happened in the character head, means that it wasn't said out loud but the character only thought it.
+- Do not include remarks stated by the narrator or descriptive text.
+- Only extract remarks from the provided text - do not use external knowledge.
+- When context from a previous section is provided, use it to better understand ongoing conversations and situations, but extract remarks ONLY from the current text section.
+- Use the exact character names as they appear in the text for both character_name (who said it) and target (who it was about).
+- If the character made a remark about a group, include all the members of the group in the target.
+- If the character made a remark someone's belonging or relatives include both the person and the belonging or relatives in the target.
+- For each remark, provide a brief description of what was said (1-2 sentences maximum).
+- Output strictly as JSON.
+- Keep the descriptions short and concise.
+    `;
+
+    const SENTIMENT_ANALYSIS_SYSTEM_PROMPT = `
+You are an expert Harry Potter sentiment analyzer. You will analyze a batch of remarks/comments from the same paragraph and determine the sentiment of the speaker towards their target.
+
+For each item in the batch:
+- Analyze the remark to understand what the speaker said or thought about the target
+- Use the overall paragraph context provided at the beginning to better understand the situation, tone, and relationship between characters.
+- Determine if the sentiment of the speaker towards the target in the specific provided remark is positive, negative, or neutral.`;
+
+    const CHARACTER_CONVERSION_SYSTEM_PROMPT = `
+You are a Harry Potter character name converter. Your job is to take character names and convert them to their canonical match from the predefined list.
+
+For each character name, find the best match from the valid characters list. Special cases:
+
+1. **Families/Groups**: If the name refers to a family or group (e.g., "Ron's family", "the Weasleys", "Hermione's parents"), return ALL individual members from that group that are in the valid list.
+
+2. **Self-references**: If the name refers to the speaker themselves (e.g., "myself", "me", "I", "him", "her"), use the context provided to identify who the speaker is and map it to that character.
+
+3. **Belongings/Relatives**: If the name refers to someone's belongings or relatives (e.g., "Harry's owl", "Hermione's parents", "Ron's rat"), include both the owner AND the belonging/relative if in the valid list.
+
+4. **Regular names**: For regular character names, find the closest match (e.g., "Dumbledore" -> "Albus Dumbledore").
+
+5. **Unknown/Generic**: If no good match exists, use broader categories like "Students", "Wizards", "Muggles", etc., or "other" as last resort.
+
+Return a mapping where each original name maps to an array of valid character names (even if it's just one character, use an array).
+    `;
+
+    // User message templates
+    function createRemarksExtractionUserMessage(chunkText, previousChunkText = null) {
+      if (previousChunkText) {
+        return `Here is some context from the previous section for continuity:
+"""
+${previousChunkText}
+"""
+
+Now extract ALL remarks and comments made by any character from this current text:
+"""
+${chunkText}
+"""
+
+Note: The previous section is provided only for context. Extract remarks ONLY from the current text, not from the context section.`;
+      } else {
+        return `Extract ALL remarks and comments made by any character from this text:
+"""
+${chunkText}
+"""`;
+      }
+    }
+
+    function createSentimentAnalysisUserMessage(batchData, chunkInfo = null) {
+      const chunkContext = chunkInfo ? `The remarks where extracted from this text:
+"""
+${chunkInfo.chunk_text}
+"""
+
+` : '';
+      
+      const bookInfo = chunkInfo ? `Book ${chunkInfo.book}` : '';
+      
+      const remarksData = batchData.map((item, index) => `
+Item index: ${index},
+Speaker: ${item.speaker},
+Target: ${item.target},
+The remark made by ${item.speaker} about ${item.target}: "${item.description}"
+`).join('\n');
+
+      return `${chunkContext}Analyze the sentiment for each of following remarks from ${bookInfo}:
+
+${remarksData}`;
+    }
+
+    function createCharacterConversionUserMessage(namesToConvert, contextData) {
+      return `Convert these character names to match the valid character list:
+
+Names to convert: ${JSON.stringify(namesToConvert, null, 2)}
+
+Context (for resolving self-references and belongings):
+${JSON.stringify(contextData, null, 2)}
+
+Use the context to resolve self-references like "myself", "me", "I", "him", "her" to the actual speaker.
+For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the owner and the belonging/relative in the mapped array.`;
+    }
+
     function getApiKey() {
       return document.getElementById('apiKeyInput').value.trim();
     }
 
     // Load character names from JSON file
     let validCharacters = [];
-    
+
     // Initialize with fallback character names
     function initializeFallbackCharacters() {
       validCharacters = [
@@ -119,11 +224,11 @@
       try {
         const fileText = await file.text();
         const data = JSON.parse(fileText);
-        
+
         if (!data.character_names || !Array.isArray(data.character_names)) {
           throw new Error('Invalid JSON format: missing character_names array');
         }
-        
+
         validCharacters = data.character_names;
         updateCharacterNamesStatus(`✅ Loaded ${validCharacters.length} characters from ${file.name}`, 'green');
         console.log(`✅ Loaded ${validCharacters.length} character names from ${file.name}`);
@@ -153,43 +258,119 @@
     }
 
 
-    // Function to parse JSON file and return array of objects formatted for sentiment analysis
+    // Function to parse JSON file and return chunk-based structure for sentiment analysis
     async function parseJSONFile(file) {
       try {
         const jsonText = await file.text();
         const jsonData = JSON.parse(jsonText);
 
-        if (!jsonData.successful_chunks) {
-          throw new Error('JSON file must contain "successful_chunks" property with the remarks extraction format');
-        }
+        const chunks = [];
 
-        const data = [];
-        
-        // Iterate through books and chunks
-        Object.entries(jsonData.successful_chunks).forEach(([bookKey, bookData]) => {
-          // Extract book number from key like "Book 1"
-          const bookMatch = bookKey.match(/Book (\d+)/);
-          const bookNumber = bookMatch ? bookMatch[1] : 'unknown';
-          
-          Object.entries(bookData).forEach(([chunkKey, chunkData]) => {
+        // Check for new flat format first
+        if (jsonData.chunks && Array.isArray(jsonData.chunks)) {
+          // New flat format
+          jsonData.chunks.forEach((chunkData, index) => {
             const chunkText = chunkData.chunk_text || '';
             const remarks = chunkData.remarks || [];
-            
-            // Convert each remark to sentiment analysis format
-            remarks.forEach(remark => {
-              data.push({
-                book: bookNumber,
-                speaker: remark.character_name || '',
-                target: Array.isArray(remark.target) ? remark.target.join(', ') : remark.target || '',
-                sentiment: '', // Empty, to be filled by sentiment analysis
-                description: remark.description || '',
-                chunk_text: chunkText
+            const book = chunkData.book || 'unknown';
+            const chunkIndex = chunkData.chunk_index !== undefined ? chunkData.chunk_index : index;
+
+            if (remarks.length > 0) {
+              // Split multi-target remarks into individual entries
+              const splitRemarks = [];
+              
+              remarks.forEach(remark => {
+                if (Array.isArray(remark.target) && remark.target.length > 1) {
+                  // Split multi-target remark into separate entries
+                  remark.target.forEach(target => {
+                    splitRemarks.push({
+                      book: book.toString(),
+                      speaker: remark.character_name || '',
+                      target: target,
+                      sentiment: '', // Empty, to be filled by sentiment analysis
+                      description: remark.description || ''
+                    });
+                  });
+                } else {
+                  // Single target
+                  splitRemarks.push({
+                    book: book.toString(),
+                    speaker: remark.character_name || '',
+                    target: Array.isArray(remark.target) ? remark.target[0] : remark.target || '',
+                    sentiment: '', // Empty, to be filled by sentiment analysis
+                    description: remark.description || ''
+                  });
+                }
               });
+
+              // Create a chunk batch with all split remarks from this chunk
+              const chunkBatch = {
+                book: book.toString(),
+                chunkKey: `Chunk ${chunkIndex}`,
+                chunk_text: chunkText,
+                remarks: splitRemarks
+              };
+              chunks.push(chunkBatch);
+            }
+          });
+        }
+        // Backward compatibility: check for old nested format
+        else if (jsonData.successful_chunks) {
+          // Old nested format
+          Object.entries(jsonData.successful_chunks).forEach(([bookKey, bookData]) => {
+            // Extract book number from key like "Book 1"
+            const bookMatch = bookKey.match(/Book (\d+)/);
+            const bookNumber = bookMatch ? bookMatch[1] : 'unknown';
+
+            Object.entries(bookData).forEach(([chunkKey, chunkData]) => {
+              const chunkText = chunkData.chunk_text || '';
+              const remarks = chunkData.remarks || [];
+
+              if (remarks.length > 0) {
+                // Split multi-target remarks into individual entries
+                const splitRemarks = [];
+                
+                remarks.forEach(remark => {
+                  if (Array.isArray(remark.target) && remark.target.length > 1) {
+                    // Split multi-target remark into separate entries
+                    remark.target.forEach(target => {
+                      splitRemarks.push({
+                        book: bookNumber,
+                        speaker: remark.character_name || '',
+                        target: target,
+                        sentiment: '', // Empty, to be filled by sentiment analysis
+                        description: remark.description || ''
+                      });
+                    });
+                  } else {
+                    // Single target
+                    splitRemarks.push({
+                      book: bookNumber,
+                      speaker: remark.character_name || '',
+                      target: Array.isArray(remark.target) ? remark.target[0] : remark.target || '',
+                      sentiment: '', // Empty, to be filled by sentiment analysis
+                      description: remark.description || ''
+                    });
+                  }
+                });
+
+                // Create a chunk batch with all split remarks from this chunk
+                const chunkBatch = {
+                  book: bookNumber,
+                  chunkKey: chunkKey,
+                  chunk_text: chunkText,
+                  remarks: splitRemarks
+                };
+                chunks.push(chunkBatch);
+              }
             });
           });
-        });
+        }
+        else {
+          throw new Error('JSON file must contain either "chunks" array (new format) or "successful_chunks" property (old format) with the remarks extraction format');
+        }
 
-        return data;
+        return chunks;
       } catch (error) {
         console.error(`Error parsing JSON file ${file.name}:`, error);
         throw error;
@@ -239,6 +420,12 @@
       });
 
       const apiCallPromise = async () => {
+        // Create user message for debugging
+        const userMessage = createRemarksExtractionUserMessage(chunkText, previousChunkText);
+        
+        // Console log for debugging (uncomment when needed)
+        // console.log(`[DEBUG] Remarks extraction user message for Book ${book}, Chunk ${chunkIndex}:`, userMessage);
+        
         const response = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
           headers: {
@@ -250,40 +437,11 @@
             messages: [
               {
                 role: "system",
-                content: `
-You are an expert text analyzer. Analyze the provided Harry Potter text and extract ALL remarks and comments made by characters:
-- Read the entire text carefully, ensuring no comment or remarks is skipped.
-- Include remarks or comments made by any character mentioned in the text, not just the main ones.
-- Include remarks or comments made on any kind of group of people or animals or objects, for instance family, musicians, gingers, irish, cats, table....
-- Include remarks or comments made behind the back where the subject wasn't present.
-- Include remarks or comments happened in the character head, means that it wasn't said out loud but the character only thought it.
-- Do not include remarks stated by the narrator or descriptive text.
-- Only extract remarks from the provided text - do not use external knowledge.
-- When context from a previous section is provided, use it to better understand ongoing conversations and situations, but extract remarks ONLY from the current text section.
-- Use the exact character names as they appear in the text for both character_name (who said it) and target (who it was about).
-- If the character made a remark about a group, include all the members of the group in the target.
-- If the character made a remark someone's belonging or relatives include both the person and the belonging or relatives in the target.
-- For each remark, provide a brief description of what was said (1-2 sentences maximum).
-- Output strictly as JSON.
-- Keep the descriptions short and concise.
-                `
+                content: REMARKS_EXTRACTION_SYSTEM_PROMPT
               },
               {
                 role: "user",
-                content: `${previousChunkText ? `Here is some context from the previous section for continuity:
-                """
-                ${previousChunkText}
-                """
-
-                Now extract ALL remarks and comments made by any character from this current text:
-                """
-                ${chunkText}
-                """
-
-                Note: The previous section is provided only for context. Extract remarks ONLY from the current text, not from the context section.` : `Extract ALL remarks and comments made by any character from this text:
-                """
-                ${chunkText}
-                """`}`
+                content: userMessage
               }
             ],
             temperature: 0,
@@ -355,12 +513,18 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
       }
     }
 
-    async function makeSentimentAnalysisCall(batchData, batchIndex) {
+    async function makeSentimentAnalysisCall(batchData, batchIndex, chunkInfo = null) {
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => reject(new Error('Request timeout after 30 seconds')), 30000);
       });
 
       const apiCallPromise = async () => {
+        // Create user message for debugging
+        const userMessage = createSentimentAnalysisUserMessage(batchData, chunkInfo);
+        
+        // Console log for debugging (uncomment when needed)
+        // console.log(`[DEBUG] Sentiment analysis user message for batch ${batchIndex}:`, userMessage);
+        
         const response = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
           headers: {
@@ -372,28 +536,11 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
             messages: [
               {
                 role: "system",
-                content: `
-You are an expert Harry Potter sentiment analyzer. You will analyze a batch of remarks/comments and determine the sentiment of each speaker towards their target.
-
-For each item in the batch:
-- Analyze the remark to understand what the speaker said or thought about the target
-- Use the paragraph text as additional context to better understand the situation, tone, and relationship between characters.
-- Determine if the sentiment of the speaker towards the target in the specifc provided remark is positive, negative, or neutral.
-- Consider the context and tone of the remark.
-
-Return the analysis for all items in the batch with the corrected sentiment values.`
+                content: SENTIMENT_ANALYSIS_SYSTEM_PROMPT
               },
               {
                 role: "user",
-                content: `Analyze the sentiment for each of these ${batchData.length} remarks (Batch ${batchIndex}):
-
-${batchData.map((item, index) => `
-Item index: ${index},
-Speaker: ${item.speaker},
-Target: ${item.target},
-The remark made by ${item.speaker} about ${item.target}: "${item.description}"${item.chunk_text ? `,
-Overall Paragraph Text: ${item.chunk_text}` : ''}
-`).join('\n')}`
+                content: userMessage
               }
             ],
             temperature: 0,
@@ -416,19 +563,19 @@ Overall Paragraph Text: ${item.chunk_text}` : ''}
                         properties: {
                           item_index: {
                             type: "integer",
-                            description: "The index of this item within the batch (0-based)"
+                            description: "The index of this item within the batch (0-based) according to 'Item index' value"
                           },
-                          new_sentiment: {
+                          sentiment: {
                             type: "string",
                             enum: ["positive", "negative", "neutral"],
-                            description: "Does the speaker said/though something positive, neutral or negative about the target, in the provided remark"
+                            description: "Does the speaker said/though something positive, neutral or negative about the target, in the specific remark"
                           },
                           reasoning: {
                             type: "string",
                             description: "Brief explanation for the sentiment classification"
                           }
                         },
-                        required: ["item_index", "new_sentiment",  "reasoning"],
+                        required: ["item_index", "sentiment",  "reasoning"],
                         additionalProperties: false
                       }
                     }
@@ -491,6 +638,12 @@ Overall Paragraph Text: ${item.chunk_text}` : ''}
       });
 
       const conversionPromise = async () => {
+        // Create user message for debugging
+        const userMessage = createCharacterConversionUserMessage(namesToConvert, contextData);
+        
+        // Console log for debugging (uncomment when needed)
+        // console.log(`[DEBUG] Character conversion user message:`, userMessage);
+        
         const response = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
           headers: {
@@ -502,35 +655,11 @@ Overall Paragraph Text: ${item.chunk_text}` : ''}
             messages: [
               {
                 role: "system",
-                content: `
-You are a Harry Potter character name converter. Your job is to take character names and convert them to their canonical match from the predefined list.
-
-For each character name, find the best match from the valid characters list. Special cases:
-
-1. **Families/Groups**: If the name refers to a family or group (e.g., "Ron's family", "the Weasleys", "Hermione's parents"), return ALL individual members from that group that are in the valid list.
-
-2. **Self-references**: If the name refers to the speaker themselves (e.g., "myself", "me", "I", "him", "her"), use the context provided to identify who the speaker is and map it to that character.
-
-3. **Belongings/Relatives**: If the name refers to someone's belongings or relatives (e.g., "Harry's owl", "Hermione's parents", "Ron's rat"), include both the owner AND the belonging/relative if in the valid list.
-
-4. **Regular names**: For regular character names, find the closest match (e.g., "Dumbledore" -> "Albus Dumbledore").
-
-5. **Unknown/Generic**: If no good match exists, use broader categories like "Students", "Wizards", "Muggles", etc., or "other" as last resort.
-
-Return a mapping where each original name maps to an array of valid character names (even if it's just one character, use an array).
-                `
+                content: CHARACTER_CONVERSION_SYSTEM_PROMPT
               },
               {
                 role: "user",
-                content: `Convert these character names to match the valid character list:
-
-                Names to convert: ${JSON.stringify(namesToConvert, null, 2)}
-
-                Context (for resolving self-references and belongings):
-                ${JSON.stringify(contextData, null, 2)}
-
-                Use the context to resolve self-references like "myself", "me", "I", "him", "her" to the actual speaker.
-                For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the owner and the belonging/relative in the mapped array.`
+                content: userMessage
               }
             ],
             temperature: 0,
@@ -632,6 +761,36 @@ Return a mapping where each original name maps to an array of valid character na
       return updatedData;
     }
 
+    function splitMultiTargetRemarks(remarkData) {
+      // Create a deep copy of the original data
+      const splitData = JSON.parse(JSON.stringify(remarkData));
+      
+      // Create a new array for the split remarks
+      const splitRemarks = [];
+      
+      splitData.remarks.forEach(remark => {
+        if (Array.isArray(remark.target) && remark.target.length > 1) {
+          // Split multi-target remark into separate entries
+          remark.target.forEach(target => {
+            splitRemarks.push({
+              ...remark,
+              target: target // Convert from array to single string
+            });
+          });
+        } else {
+          // Single target - convert array to string
+          splitRemarks.push({
+            ...remark,
+            target: Array.isArray(remark.target) ? remark.target[0] : remark.target
+          });
+        }
+      });
+      
+      // Update the splitData with the new remarks array
+      splitData.remarks = splitRemarks;
+      return splitData;
+    }
+
     async function extractInsults(updateProgress) {
       const fileInput = document.getElementById('bookFiles');
       const selectedFiles = Array.from(fileInput.files);
@@ -708,11 +867,19 @@ Return a mapping where each original name maps to an array of valid character na
 
             if (conversionResult.success && conversionResult.mapping) {
               const updatedData = applyCharacterMapping(result.value.data, conversionResult.mapping);
-              allResults.push(updatedData);
+              const splitData = splitMultiTargetRemarks(updatedData);
+              // Preserve book and chunkIndex metadata
+              splitData.book = book;
+              splitData.chunkIndex = chunkIndex;
+              allResults.push(splitData);
             } else {
               // If conversion fails, use original data and log warning
               console.warn(`Character conversion failed for book ${book}, chunk ${chunkIndex}: ${conversionResult.error}`);
-              allResults.push(result.value.data);
+              const splitData = splitMultiTargetRemarks(result.value.data);
+              // Preserve book and chunkIndex metadata
+              splitData.book = book;
+              splitData.chunkIndex = chunkIndex;
+              allResults.push(splitData);
             }
           } else {
             const errorMessage = result.status === 'fulfilled'
@@ -761,12 +928,20 @@ Return a mapping where each original name maps to an array of valid character na
 
               if (conversionResult.success && conversionResult.mapping) {
                 const updatedData = applyCharacterMapping(retryResult.data, conversionResult.mapping);
-                allResults.push(updatedData);
+                const splitData = splitMultiTargetRemarks(updatedData);
+                // Preserve book and chunkIndex metadata
+                splitData.book = book;
+                splitData.chunkIndex = chunkIndex;
+                allResults.push(splitData);
                 retriedChunks.push({ book, chunkIndex });
               } else {
                 // If conversion fails, use original data and log warning
                 console.warn(`Character conversion failed for retry of book ${book}, chunk ${chunkIndex}: ${conversionResult.error}`);
-                allResults.push(retryResult.data);
+                const splitData = splitMultiTargetRemarks(retryResult.data);
+                // Preserve book and chunkIndex metadata
+                splitData.book = book;
+                splitData.chunkIndex = chunkIndex;
+                allResults.push(splitData);
                 retriedChunks.push({ book, chunkIndex });
               }
               updateProgress(`✅ Retry successful: Book ${book}, Chunk ${chunkIndex}`);
@@ -825,31 +1000,34 @@ Return a mapping where each original name maps to an array of valid character na
       const jsonFile = jsonFileInput.files[0];
       updateProgress(`Reading JSON file: ${jsonFile.name}...`);
 
-      // Parse JSON file
-      const jsonData = await parseJSONFile(jsonFile);
-      updateProgress(`Parsed ${jsonData.length} remarks from JSON file`);
+      // Parse JSON file - now returns chunk-based structure
+      const chunkBatches = await parseJSONFile(jsonFile);
+      const totalRemarks = chunkBatches.reduce((sum, chunk) => sum + chunk.remarks.length, 0);
+      updateProgress(`Parsed ${totalRemarks} remarks from ${chunkBatches.length} chunks`);
 
-      if (jsonData.length === 0) {
-        throw new Error('No remarks found in JSON file');
+      if (chunkBatches.length === 0) {
+        throw new Error('No chunks with remarks found in JSON file');
       }
 
-      // Process in batches
-      const batchSize = 20; // Larger batches since we're not processing huge text chunks
-      const maxParallelBatches = 5; // Maximum number of batches to process in parallel
+      // Process chunks as natural batches (each chunk becomes one batch)
+      const maxParallelBatches = 5; // Maximum number of chunks to process in parallel
       let allResults = [];
       let failedBatches = [];
-      const totalBatches = Math.ceil(jsonData.length / batchSize);
+      const totalBatches = chunkBatches.length;
       let completedBatches = 0;
 
-      updateProgress(`Processing ${jsonData.length} items in ${totalBatches} batches (max ${maxParallelBatches} parallel)...`);
+      updateProgress(`Processing ${totalRemarks} remarks in ${totalBatches} chunk-based batches (max ${maxParallelBatches} parallel)...`);
 
-      // Create all batch requests
-      const allBatchRequests = [];
-      for (let i = 0; i < jsonData.length; i += batchSize) {
-        const batch = jsonData.slice(i, i + batchSize);
-        const batchIndex = Math.floor(i / batchSize);
-        allBatchRequests.push({ batch, batchIndex });
-      }
+      // Create chunk-based batch requests
+      const allBatchRequests = chunkBatches.map((chunkBatch, index) => ({
+        batch: chunkBatch.remarks, // The remarks from this chunk
+        batchIndex: index,
+        chunkInfo: {
+          book: chunkBatch.book,
+          chunkKey: chunkBatch.chunkKey,
+          chunk_text: chunkBatch.chunk_text
+        }
+      }));
 
       // Process batches in parallel groups
       for (let i = 0; i < allBatchRequests.length; i += maxParallelBatches) {
@@ -857,11 +1035,14 @@ Return a mapping where each original name maps to an array of valid character na
         const groupNumber = Math.floor(i / maxParallelBatches) + 1;
         const totalGroups = Math.ceil(allBatchRequests.length / maxParallelBatches);
 
-        updateProgress(`Processing batch group ${groupNumber}/${totalGroups} (${parallelBatches.length} batches in parallel)...`);
+        updateProgress(`Processing chunk group ${groupNumber}/${totalGroups} (${parallelBatches.length} chunks in parallel)...`);
 
-        // Execute batches in parallel
-        const batchPromises = parallelBatches.map(({ batch, batchIndex }) =>
-          makeSentimentAnalysisCall(batch, batchIndex)
+        // Execute chunk-based batches in parallel
+        const batchPromises = parallelBatches.map(({ batch, batchIndex, chunkInfo }) =>
+          makeSentimentAnalysisCall(batch, batchIndex, chunkInfo).then(result => ({
+            ...result,
+            chunkInfo: chunkInfo
+          }))
         );
         const batchResults = await Promise.allSettled(batchPromises);
 
@@ -869,17 +1050,20 @@ Return a mapping where each original name maps to an array of valid character na
         for (let j = 0; j < batchResults.length; j++) {
           completedBatches++;
           const result = batchResults[j];
-          const { batch, batchIndex } = parallelBatches[j];
+          const { batch, batchIndex, chunkInfo } = parallelBatches[j];
 
           if (result.status === 'fulfilled' && result.value.success) {
-            allResults.push(result.value.data);
-            updateProgress(`✅ Completed batch ${batchIndex + 1}/${totalBatches} in group ${groupNumber}`);
+            allResults.push({
+              ...result.value.data,
+              chunkInfo: result.value.chunkInfo
+            });
+            updateProgress(`✅ Completed chunk ${batchIndex + 1}/${totalBatches} (${chunkInfo.chunkKey}) in group ${groupNumber}`);
           } else {
             const errorMessage = result.status === 'fulfilled'
               ? result.value.error
               : result.reason?.message || 'Unknown error';
-            failedBatches.push({ batchIndex, batch, error: errorMessage });
-            updateProgress(`❌ Failed batch ${batchIndex + 1}/${totalBatches}: ${errorMessage}`);
+            failedBatches.push({ batchIndex, batch, chunkInfo, error: errorMessage });
+            updateProgress(`❌ Failed chunk ${batchIndex + 1}/${totalBatches} (${chunkInfo.chunkKey}): ${errorMessage}`);
           }
         }
 
@@ -896,27 +1080,30 @@ Return a mapping where each original name maps to an array of valid character na
       let remainingFailures = [];
 
       if (failedBatches.length > 0) {
-        updateProgress(`Retrying ${failedBatches.length} failed batches...`);
+        updateProgress(`Retrying ${failedBatches.length} failed chunks...`);
 
         for (let i = 0; i < failedBatches.length; i++) {
-          const { batchIndex, batch, error } = failedBatches[i];
+          const { batchIndex, batch, chunkInfo, error } = failedBatches[i];
 
-          updateProgress(`Retrying ${i + 1}/${failedBatches.length}: Batch ${batchIndex}...`);
+          updateProgress(`Retrying ${i + 1}/${failedBatches.length}: Chunk ${batchIndex} (${chunkInfo.chunkKey})...`);
 
           try {
-            const retryResult = await makeSentimentAnalysisCall(batch, batchIndex);
+            const retryResult = await makeSentimentAnalysisCall(batch, batchIndex, chunkInfo);
 
             if (retryResult.success) {
-              allResults.push(retryResult.data);
-              retriedBatches.push({ batchIndex });
-              updateProgress(`✅ Retry successful: Batch ${batchIndex}`);
+              allResults.push({
+                ...retryResult.data,
+                chunkInfo: chunkInfo
+              });
+              retriedBatches.push({ batchIndex, chunkInfo });
+              updateProgress(`✅ Retry successful: Chunk ${batchIndex} (${chunkInfo.chunkKey})`);
             } else {
-              remainingFailures.push({ batchIndex, batch, error: retryResult.error });
-              updateProgress(`❌ Retry failed: Batch ${batchIndex} - ${retryResult.error}`);
+              remainingFailures.push({ batchIndex, batch, chunkInfo, error: retryResult.error });
+              updateProgress(`❌ Retry failed: Chunk ${batchIndex} (${chunkInfo.chunkKey}) - ${retryResult.error}`);
             }
           } catch (retryError) {
-            remainingFailures.push({ batchIndex, batch, error: retryError.message });
-            updateProgress(`❌ Retry failed: Batch ${batchIndex} - ${retryError.message}`);
+            remainingFailures.push({ batchIndex, batch, chunkInfo, error: retryError.message });
+            updateProgress(`❌ Retry failed: Chunk ${batchIndex} (${chunkInfo.chunkKey}) - ${retryError.message}`);
           }
 
           // Add a delay between retry attempts
@@ -926,10 +1113,17 @@ Return a mapping where each original name maps to an array of valid character na
         }
       }
 
+      // Flatten the chunk-based results back to a flat array for downstream processing
+      const flattenedOriginalData = chunkBatches.reduce((acc, chunk) => {
+        acc.push(...chunk.remarks);
+        return acc;
+      }, []);
+
       return {
         results: allResults,
-        originalData: jsonData, // Include original JSON data for reference
-        totalItems: jsonData.length,
+        originalData: flattenedOriginalData, // Flattened for downstream processing
+        chunkBatches: chunkBatches, // Include chunk batch information
+        totalItems: totalRemarks,
         totalBatches: totalBatches,
         successfulBatches: allResults.length,
         originalFailures: failedBatches.length,
@@ -959,7 +1153,7 @@ Return a mapping where each original name maps to an array of valid character na
 
     function generateTimestamp() {
       const now = new Date();
-      return now.getFullYear() + 
+      return now.getFullYear() +
              String(now.getMonth() + 1).padStart(2, '0') +
              String(now.getDate()).padStart(2, '0') + '_' +
              String(now.getHours()).padStart(2, '0') +
@@ -982,9 +1176,9 @@ Return a mapping where each original name maps to an array of valid character na
         alert('No results to download. Please run extraction or sentiment analysis first.');
         return;
       }
-      
+
       const timestamp = generateTimestamp();
-      
+
       // All results are downloaded as JSON
       const filename = `hp_${lastResultsType}_results_${timestamp}.json`;
       const jsonString = JSON.stringify(lastResults, null, 2);
@@ -1011,7 +1205,7 @@ Return a mapping where each original name maps to an array of valid character na
 
       const fileInput = document.getElementById('bookFiles');
       const jsonFileInput = document.getElementById('jsonFile');
-      
+
       // Check that either book files OR JSON file is provided
       if (fileInput.files.length === 0 && jsonFileInput.files.length === 0) {
         progressEl.textContent = "❌ Please select either book files for extraction OR a JSON file for analysis.";
@@ -1050,25 +1244,21 @@ Return a mapping where each original name maps to an array of valid character na
           }
         }
 
-        // Restructure successful_chunks by books -> chunks -> {chunk_text, remarks}
-        const structuredChunks = {};
+        // Create flat list of chunks
+        const chunksList = [];
         let totalRemarks = 0;
-        
+
         extractionResults.results.forEach(chunkResult => {
-          const bookKey = `Book ${chunkResult.book}`;
-          const chunkKey = `Chunk ${chunkResult.chunkIndex}`;
-          
-          // Initialize book if it doesn't exist
-          if (!structuredChunks[bookKey]) {
-            structuredChunks[bookKey] = {};
-          }
-          
-          // Add chunk with its text and remarks
-          structuredChunks[bookKey][chunkKey] = {
+          // Create flat chunk structure
+          const chunk = {
+            book: chunkResult.book || 'unknown',
+            chunk_index: chunkResult.chunkIndex !== undefined ? chunkResult.chunkIndex : 'undefined',
             chunk_text: chunkResult.chunk_text || '',
             remarks: chunkResult.remarks || []
           };
-          
+
+          chunksList.push(chunk);
+
           // Count total remarks
           if (chunkResult.remarks && Array.isArray(chunkResult.remarks)) {
             totalRemarks += chunkResult.remarks.length;
@@ -1077,7 +1267,7 @@ Return a mapping where each original name maps to an array of valid character na
 
         // Prepare output with results and retry summary
         let output = {
-          successful_chunks: structuredChunks,
+          chunks: chunksList,
           summary: {
             total_chunks: extractionResults.totalSuccess + extractionResults.totalFailed,
             successful: extractionResults.totalSuccess,
@@ -1149,7 +1339,7 @@ Return a mapping where each original name maps to an array of valid character na
 
       const jsonFileInput = document.getElementById('jsonFile');
       const fileInput = document.getElementById('bookFiles');
-      
+
       // Check that either JSON file OR book files is provided
       if (jsonFileInput.files.length === 0 && fileInput.files.length === 0) {
         progressEl.textContent = "❌ Please select either a JSON file for analysis OR book files for extraction.";
@@ -1184,13 +1374,22 @@ Return a mapping where each original name maps to an array of valid character na
         // Create a map to track which items have been processed
         const processedItems = new Map();
 
-        // Process all successfully analyzed items
+        // Process all successfully analyzed items - using chunk-aware indexing
+        let globalIndexOffset = 0;
+        const chunkSizes = analysisResults.chunkBatches.map(chunk => chunk.remarks.length);
+
         analysisResults.results.forEach(batchResult => {
+          // Calculate the starting index for this chunk/batch
+          let startIndex = 0;
+          for (let i = 0; i < batchResult.batch_index; i++) {
+            startIndex += chunkSizes[i] || 0;
+          }
+
           batchResult.analyzed_items.forEach(item => {
             // Calculate the correct global index for this item
-            const globalIndex = batchResult.batch_index * 20 + item.item_index;
+            const globalIndex = startIndex + item.item_index;
             processedItems.set(globalIndex, {
-              new_sentiment: item.new_sentiment,
+              sentiment: item.sentiment,
               reasoning: item.reasoning
             });
           });
@@ -1200,18 +1399,18 @@ Return a mapping where each original name maps to an array of valid character na
         enhancedResults.forEach((originalItem, index) => {
           if (processedItems.has(index)) {
             const analysisResult = processedItems.get(index);
-            originalItem.new_sentiment = analysisResult.new_sentiment;
+            originalItem.sentiment = analysisResult.sentiment;
             originalItem.reasoning = analysisResult.reasoning;
           } else {
             // Item wasn't processed (likely due to batch failure)
-            originalItem.new_sentiment = "";
+            originalItem.sentiment = "";
             originalItem.reasoning = "Not processed due to batch failure";
           }
         });
 
         // Count processed vs unprocessed items
-        const processedCount = enhancedResults.filter(item => item.new_sentiment && item.new_sentiment !== "").length;
-        const unprocessedCount = enhancedResults.filter(item => !item.new_sentiment || item.new_sentiment === "").length;
+        const processedCount = enhancedResults.filter(item => item.sentiment && item.sentiment !== "").length;
+        const unprocessedCount = enhancedResults.filter(item => !item.sentiment || item.sentiment === "").length;
 
         // Prepare output
         let output = {
@@ -1226,7 +1425,7 @@ Return a mapping where each original name maps to an array of valid character na
             retried_successes: analysisResults.retriedSuccess,
             remaining_failures: analysisResults.remainingFailures
           },
-          data_fields: ["book", "speaker", "target", "sentiment", "description", "chunk_text", "new_sentiment", "reasoning"]
+          data_fields: ["book", "speaker", "target", "sentiment", "description", "reasoning"]
         };
 
         // Add failed batches information if there are remaining failures
