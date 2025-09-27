@@ -125,7 +125,9 @@ You are an expert Harry Potter sentiment analyzer. You will analyze a batch of r
 For each item in the batch:
 - Analyze the remark to understand what the speaker said or thought about the target
 - Use the overall paragraph context provided at the beginning to better understand the situation, tone, and relationship between characters.
-- Determine if the sentiment of the speaker towards the target in the specific provided remark is positive, negative, or neutral.`;
+- Determine if the sentiment of the speaker towards the target in the specific provided remark is positive, negative, or neutral.
+
+Return your analysis as JSON with an "analyzed_items" array containing the sentiment and reasoning for each item, indexed by the "item_index" provided in the input.`;
 
     const CHARACTER_CONVERSION_SYSTEM_PROMPT = `
 You are a Harry Potter character name converter. Your job is to take character names and convert them to their canonical match from the predefined list.
@@ -515,7 +517,7 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
 
     async function makeSentimentAnalysisCall(batchData, batchIndex, chunkInfo = null) {
       const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Request timeout after 30 seconds')), 30000);
+        setTimeout(() => reject(new Error('Request timeout after 30 seconds')), 120000);
       });
 
       const apiCallPromise = async () => {
@@ -552,9 +554,6 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
                 schema: {
                   type: "object",
                   properties: {
-                    batch_index: {
-                      type: "integer"
-                    },
                     analyzed_items: {
                       type: "array",
                       description: "Analysis results for each item in the batch",
@@ -580,7 +579,7 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
                       }
                     }
                   },
-                  required: ["batch_index", "analyzed_items"],
+                  required: ["analyzed_items"],
                   additionalProperties: false
                 }
               }
@@ -592,9 +591,29 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
 
         try {
           const parsed = JSON.parse(completion.choices[0].message.content);
+          
+          // Add the batch_index ourselves since we know what it should be
+          parsed.batch_index = batchIndex;
+          
+          if (!parsed.analyzed_items || !Array.isArray(parsed.analyzed_items)) {
+            console.error(`Missing or invalid analyzed_items in response for batch ${batchIndex}`);
+            return { success: false, error: `Missing analyzed_items array in API response`, batchIndex };
+          }
+          
+          // Validate each analyzed item
+          for (let i = 0; i < parsed.analyzed_items.length; i++) {
+            const item = parsed.analyzed_items[i];
+            if (!item || typeof item.item_index !== 'number' || !item.sentiment || !item.reasoning) {
+              console.error(`Invalid analyzed item at index ${i} in batch ${batchIndex}:`, item);
+              return { success: false, error: `Invalid analyzed item structure at index ${i}`, batchIndex };
+            }
+          }
+          
+          console.log(`[DEBUG] Successfully parsed batch ${batchIndex} with ${parsed.analyzed_items.length} items`);
           return { success: true, data: parsed, batchIndex };
         } catch (err) {
           console.error(`Failed to parse JSON for sentiment batch ${batchIndex}:`, err);
+          console.error(`Raw content:`, completion.choices[0].message.content);
           return { success: false, error: `Parse error: ${err.message}`, batchIndex };
         }
       };
@@ -816,7 +835,7 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
         try {
           updateProgress(`Reading ${file.name}...`);
           const bookText = await readBookFile(file);
-          const chunks = chunkText(bookText).filter((c,i) => [1, 142].includes(i));
+          const chunks = chunkText(bookText);
 
           updateProgress(`${file.name}: Created ${chunks.length} chunks`);
 
@@ -898,26 +917,32 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
         }
       }
 
-      // Retry failed chunks one by one
+      // Retry failed chunks with up to 10 iterations
       let retriedChunks = [];
-      let remainingFailures = [];
+      let remainingFailures = [...failedChunks]; // Start with all failed chunks
+      let retryIteration = 0;
+      const maxRetryIterations = 10;
 
-      if (failedChunks.length > 0) {
-        updateProgress(`Retrying ${failedChunks.length} failed chunks one by one...`);
+      while (remainingFailures.length > 0 && retryIteration < maxRetryIterations) {
+        retryIteration++;
+        const currentFailures = [...remainingFailures];
+        remainingFailures = [];
 
-        for (let i = 0; i < failedChunks.length; i++) {
-          const { book, chunkIndex } = failedChunks[i];
+        updateProgress(`Retry iteration ${retryIteration}/${maxRetryIterations}: Processing ${currentFailures.length} failed chunks...`);
+
+        for (let i = 0; i < currentFailures.length; i++) {
+          const { book, chunkIndex } = currentFailures[i];
           const originalChunk = allChunkRequests.find(req =>
             req.book === book && req.chunkIndex === chunkIndex
           );
 
           if (!originalChunk) {
             console.error(`Could not find original chunk data for book ${book}, chunk ${chunkIndex}`);
-            remainingFailures.push(failedChunks[i]);
+            remainingFailures.push(currentFailures[i]);
             continue;
           }
 
-          updateProgress(`Retrying ${i + 1}/${failedChunks.length}: Book ${book}, Chunk ${chunkIndex}...`);
+          updateProgress(`Iteration ${retryIteration}: Retrying ${i + 1}/${currentFailures.length} - Book ${book}, Chunk ${chunkIndex}...`);
 
           try {
             const retryResult = await makeApiCall(book, chunkIndex, originalChunk.chunkText, originalChunk.previousChunkText);
@@ -933,7 +958,7 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
                 splitData.book = book;
                 splitData.chunkIndex = chunkIndex;
                 allResults.push(splitData);
-                retriedChunks.push({ book, chunkIndex });
+                retriedChunks.push({ book, chunkIndex, iteration: retryIteration });
               } else {
                 // If conversion fails, use original data and log warning
                 console.warn(`Character conversion failed for retry of book ${book}, chunk ${chunkIndex}: ${conversionResult.error}`);
@@ -942,22 +967,34 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
                 splitData.book = book;
                 splitData.chunkIndex = chunkIndex;
                 allResults.push(splitData);
-                retriedChunks.push({ book, chunkIndex });
+                retriedChunks.push({ book, chunkIndex, iteration: retryIteration });
               }
-              updateProgress(`✅ Retry successful: Book ${book}, Chunk ${chunkIndex}`);
+              updateProgress(`✅ Iteration ${retryIteration} success: Book ${book}, Chunk ${chunkIndex}`);
             } else {
               remainingFailures.push({ book, chunkIndex, error: retryResult.error });
-              updateProgress(`❌ Retry failed: Book ${book}, Chunk ${chunkIndex} - ${retryResult.error}`);
+              updateProgress(`❌ Iteration ${retryIteration} failed: Book ${book}, Chunk ${chunkIndex} - ${retryResult.error}`);
             }
           } catch (error) {
             remainingFailures.push({ book, chunkIndex, error: error.message });
-            updateProgress(`❌ Retry failed: Book ${book}, Chunk ${chunkIndex} - ${error.message}`);
+            updateProgress(`❌ Iteration ${retryIteration} failed: Book ${book}, Chunk ${chunkIndex} - ${error.message}`);
           }
 
           // Add a small delay between retry attempts
-          if (i < failedChunks.length - 1) {
+          if (i < currentFailures.length - 1) {
             await new Promise(r => setTimeout(r, 2000));
           }
+        }
+
+        if (remainingFailures.length === 0) {
+          updateProgress(`🎉 All failed chunks successfully retried after ${retryIteration} iteration(s)!`);
+          break;
+        } else if (retryIteration >= maxRetryIterations) {
+          updateProgress(`⚠️ Reached maximum retry iterations (${maxRetryIterations}). ${remainingFailures.length} chunks still failed.`);
+          break;
+        } else {
+          updateProgress(`Iteration ${retryIteration} complete. ${remainingFailures.length} chunks still failed, preparing for next iteration...`);
+          // Add a longer delay between iterations
+          await new Promise(r => setTimeout(r, 3000));
         }
       }
 
@@ -970,13 +1007,19 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
         remainingFailedByBook[book].push({ chunkIndex, error });
       });
 
-      // Group successfully retried chunks by book
+      // Group successfully retried chunks by book and iteration
       const retriedByBook = {};
-      retriedChunks.forEach(({ book, chunkIndex }) => {
+      const retriedByIteration = {};
+      retriedChunks.forEach(({ book, chunkIndex, iteration }) => {
         if (!retriedByBook[book]) {
           retriedByBook[book] = [];
         }
         retriedByBook[book].push(chunkIndex);
+        
+        if (!retriedByIteration[iteration]) {
+          retriedByIteration[iteration] = [];
+        }
+        retriedByIteration[iteration].push({ book, chunkIndex });
       });
 
       return {
@@ -986,7 +1029,10 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
         totalSuccess: allResults.length,
         retriedSuccess: retriedChunks.length,
         retriedByBook: retriedByBook,
-        originalFailures: failedChunks.length
+        retriedByIteration: retriedByIteration,
+        originalFailures: failedChunks.length,
+        maxRetryIterationsReached: retryIteration >= maxRetryIterations,
+        totalRetryIterations: retryIteration
       };
     }
 
@@ -1075,17 +1121,23 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
         }
       }
 
-      // Retry failed batches one by one
+      // Retry failed batches with up to 10 iterations
       let retriedBatches = [];
-      let remainingFailures = [];
+      let remainingFailures = [...failedBatches]; // Start with all failed batches
+      let retryIteration = 0;
+      const maxRetryIterations = 10;
 
-      if (failedBatches.length > 0) {
-        updateProgress(`Retrying ${failedBatches.length} failed chunks...`);
+      while (remainingFailures.length > 0 && retryIteration < maxRetryIterations) {
+        retryIteration++;
+        const currentFailures = [...remainingFailures];
+        remainingFailures = [];
 
-        for (let i = 0; i < failedBatches.length; i++) {
-          const { batchIndex, batch, chunkInfo, error } = failedBatches[i];
+        updateProgress(`Retry iteration ${retryIteration}/${maxRetryIterations}: Processing ${currentFailures.length} failed chunks...`);
 
-          updateProgress(`Retrying ${i + 1}/${failedBatches.length}: Chunk ${batchIndex} (${chunkInfo.chunkKey})...`);
+        for (let i = 0; i < currentFailures.length; i++) {
+          const { batchIndex, batch, chunkInfo, error } = currentFailures[i];
+
+          updateProgress(`Iteration ${retryIteration}: Retrying ${i + 1}/${currentFailures.length} - Chunk ${batchIndex} (${chunkInfo.chunkKey})...`);
 
           try {
             const retryResult = await makeSentimentAnalysisCall(batch, batchIndex, chunkInfo);
@@ -1095,21 +1147,33 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
                 ...retryResult.data,
                 chunkInfo: chunkInfo
               });
-              retriedBatches.push({ batchIndex, chunkInfo });
-              updateProgress(`✅ Retry successful: Chunk ${batchIndex} (${chunkInfo.chunkKey})`);
+              retriedBatches.push({ batchIndex, chunkInfo, iteration: retryIteration });
+              updateProgress(`✅ Iteration ${retryIteration} success: Chunk ${batchIndex} (${chunkInfo.chunkKey})`);
             } else {
               remainingFailures.push({ batchIndex, batch, chunkInfo, error: retryResult.error });
-              updateProgress(`❌ Retry failed: Chunk ${batchIndex} (${chunkInfo.chunkKey}) - ${retryResult.error}`);
+              updateProgress(`❌ Iteration ${retryIteration} failed: Chunk ${batchIndex} (${chunkInfo.chunkKey}) - ${retryResult.error}`);
             }
           } catch (retryError) {
             remainingFailures.push({ batchIndex, batch, chunkInfo, error: retryError.message });
-            updateProgress(`❌ Retry failed: Chunk ${batchIndex} (${chunkInfo.chunkKey}) - ${retryError.message}`);
+            updateProgress(`❌ Iteration ${retryIteration} failed: Chunk ${batchIndex} (${chunkInfo.chunkKey}) - ${retryError.message}`);
           }
 
-          // Add a delay between retry attempts
-          if (i < failedBatches.length - 1) {
+          // Add a small delay between retry attempts
+          if (i < currentFailures.length - 1) {
             await new Promise(r => setTimeout(r, 2000));
           }
+        }
+
+        if (remainingFailures.length === 0) {
+          updateProgress(`🎉 All failed chunks successfully retried after ${retryIteration} iteration(s)!`);
+          break;
+        } else if (retryIteration >= maxRetryIterations) {
+          updateProgress(`⚠️ Reached maximum retry iterations (${maxRetryIterations}). ${remainingFailures.length} chunks still failed.`);
+          break;
+        } else {
+          updateProgress(`Iteration ${retryIteration} complete. ${remainingFailures.length} chunks still failed, preparing for next iteration...`);
+          // Add a longer delay between iterations
+          await new Promise(r => setTimeout(r, 3000));
         }
       }
 
@@ -1129,9 +1193,12 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
         originalFailures: failedBatches.length,
         retriedSuccess: retriedBatches.length,
         remainingFailures: remainingFailures.length,
-        failedBatches: remainingFailures
+        failedBatches: remainingFailures,
+        maxRetryIterationsReached: retryIteration >= maxRetryIterations,
+        totalRetryIterations: retryIteration
       };
     }
+
 
     // Global variables to store the last results for downloading
     let lastResults = null;
@@ -1235,10 +1302,14 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
         if (extractionResults.originalFailures > 0) {
           summary += ` Originally ${extractionResults.originalFailures} chunks failed.`;
           if (extractionResults.retriedSuccess > 0) {
-            summary += ` Successfully retried ${extractionResults.retriedSuccess} chunks.`;
+            summary += ` Successfully retried ${extractionResults.retriedSuccess} chunks across ${extractionResults.totalRetryIterations} iteration(s).`;
           }
           if (extractionResults.totalFailed > 0) {
-            summary += ` ${extractionResults.totalFailed} chunks remain failed after retry.`;
+            if (extractionResults.maxRetryIterationsReached) {
+              summary += ` ${extractionResults.totalFailed} chunks remain failed after ${extractionResults.totalRetryIterations} retry iterations (max reached).`;
+            } else {
+              summary += ` ${extractionResults.totalFailed} chunks remain failed after ${extractionResults.totalRetryIterations} retry iteration(s).`;
+            }
           } else {
             summary += ` All failed chunks were successfully retried!`;
           }
@@ -1274,7 +1345,9 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
             total_remarks: totalRemarks,
             original_failures: extractionResults.originalFailures,
             retried_successes: extractionResults.retriedSuccess,
-            remaining_failures: extractionResults.totalFailed
+            remaining_failures: extractionResults.totalFailed,
+            total_retry_iterations: extractionResults.totalRetryIterations,
+            max_retry_iterations_reached: extractionResults.maxRetryIterationsReached
           }
         };
 
@@ -1287,6 +1360,17 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
               chunk_indexes: chunkIndexes
             };
           });
+          
+          // Add iteration-based breakdown
+          if (extractionResults.retriedByIteration) {
+            output.retried_chunks_by_iteration = {};
+            Object.entries(extractionResults.retriedByIteration).forEach(([iteration, chunks]) => {
+              output.retried_chunks_by_iteration[`Iteration ${iteration}`] = {
+                success_count: chunks.length,
+                chunks: chunks.map(ch => `Book ${ch.book}, Chunk ${ch.chunkIndex}`)
+              };
+            });
+          }
         }
 
         // Add remaining failed chunks summary if there are any remaining failures
@@ -1374,24 +1458,68 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
         // Create a map to track which items have been processed
         const processedItems = new Map();
 
-        // Process all successfully analyzed items - using chunk-aware indexing
-        let globalIndexOffset = 0;
+        // Process all successfully analyzed items - with proper index mapping and validation
         const chunkSizes = analysisResults.chunkBatches.map(chunk => chunk.remarks.length);
+        
+        console.log('[DEBUG] Processing sentiment results:', {
+          totalResults: analysisResults.results.length,
+          chunkSizes: chunkSizes,
+          totalOriginalItems: analysisResults.originalData.length
+        });
 
-        analysisResults.results.forEach(batchResult => {
+        analysisResults.results.forEach((batchResult, resultIndex) => {
+          // Validate that batch_index corresponds to an actual chunk
+          if (batchResult.batch_index >= chunkSizes.length) {
+            console.error(`[ERROR] Invalid batch_index ${batchResult.batch_index}, max is ${chunkSizes.length - 1}`);
+            return;
+          }
+          
           // Calculate the starting index for this chunk/batch
           let startIndex = 0;
           for (let i = 0; i < batchResult.batch_index; i++) {
             startIndex += chunkSizes[i] || 0;
           }
 
-          batchResult.analyzed_items.forEach(item => {
+          const expectedItemsInBatch = chunkSizes[batchResult.batch_index];
+          console.log(`[DEBUG] Batch ${batchResult.batch_index}: startIndex=${startIndex}, expectedItems=${expectedItemsInBatch}, actualItems=${batchResult.analyzed_items?.length || 0}`);
+
+          if (!batchResult.analyzed_items || !Array.isArray(batchResult.analyzed_items)) {
+            console.error(`[ERROR] Batch ${batchResult.batch_index} has no analyzed_items array`);
+            return;
+          }
+
+          batchResult.analyzed_items.forEach((item, itemIndex) => {
+            // Validate item structure
+            if (!item || typeof item.item_index !== 'number' || !item.sentiment || !item.reasoning) {
+              console.error(`[ERROR] Invalid item structure at batch ${batchResult.batch_index}, item ${itemIndex}:`, item);
+              return;
+            }
+            
+            // Validate item_index is within expected range
+            if (item.item_index < 0 || item.item_index >= expectedItemsInBatch) {
+              console.error(`[ERROR] Invalid item_index ${item.item_index} in batch ${batchResult.batch_index}, expected range: 0-${expectedItemsInBatch - 1}`);
+              return;
+            }
+
             // Calculate the correct global index for this item
             const globalIndex = startIndex + item.item_index;
+            
+            // Validate global index is within bounds
+            if (globalIndex >= analysisResults.originalData.length) {
+              console.error(`[ERROR] Global index ${globalIndex} exceeds original data length ${analysisResults.originalData.length}`);
+              return;
+            }
+
+            // Get the original remark for logging
+            const originalRemark = analysisResults.originalData[globalIndex];
+
+            // Store the processed item
             processedItems.set(globalIndex, {
               sentiment: item.sentiment,
               reasoning: item.reasoning
             });
+            
+            console.log(`[DEBUG] Mapped item: globalIndex=${globalIndex}, speaker=${originalRemark.speaker}, sentiment=${item.sentiment}`);
           });
         });
 
@@ -1399,6 +1527,8 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
         enhancedResults.forEach((originalItem, index) => {
           if (processedItems.has(index)) {
             const analysisResult = processedItems.get(index);
+            
+            // Use the result normally
             originalItem.sentiment = analysisResult.sentiment;
             originalItem.reasoning = analysisResult.reasoning;
           } else {
@@ -1423,7 +1553,9 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
             successful_batches: analysisResults.successfulBatches,
             original_failures: analysisResults.originalFailures,
             retried_successes: analysisResults.retriedSuccess,
-            remaining_failures: analysisResults.remainingFailures
+            remaining_failures: analysisResults.remainingFailures,
+            total_retry_iterations: analysisResults.totalRetryIterations,
+            max_retry_iterations_reached: analysisResults.maxRetryIterationsReached
           },
           data_fields: ["book", "speaker", "target", "sentiment", "description", "reasoning"]
         };
@@ -1448,16 +1580,22 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
 
         // Update final summary message
         let finalSummary = `Done! Successfully analyzed ${processedCount}/${analysisResults.totalItems} items.`;
+        
         if (unprocessedCount > 0) {
           finalSummary += ` ${unprocessedCount} items could not be processed due to batch failures.`;
         }
+        
         if (analysisResults.originalFailures > 0) {
           finalSummary += ` (Originally ${analysisResults.originalFailures} batches failed`;
           if (analysisResults.retriedSuccess > 0) {
-            finalSummary += `, ${analysisResults.retriedSuccess} successfully retried`;
+            finalSummary += `, ${analysisResults.retriedSuccess} successfully retried across ${analysisResults.totalRetryIterations} iteration(s)`;
+          }
+          if (analysisResults.maxRetryIterationsReached) {
+            finalSummary += `, max retry iterations reached`;
           }
           finalSummary += `)`;
         }
+        
         progressEl.textContent = finalSummary;
       } catch (error) {
         progressEl.textContent = `❌ Error: ${error.message}`;
@@ -1468,7 +1606,16 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
 
     // Initialize character names on page load
     window.addEventListener('DOMContentLoaded', function() {
-      loadCharacterNames();
+      initializeFallbackCharacters();
+      
+      // Set up character names file upload handler
+      const characterNamesFileInput = document.getElementById('characterNamesFile');
+      characterNamesFileInput.addEventListener('change', async function(event) {
+        const file = event.target.files[0];
+        if (file) {
+          await loadCharacterNamesFromFile(file);
+        }
+      });
     });
   </script>
 </body>
