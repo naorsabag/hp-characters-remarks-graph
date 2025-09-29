@@ -117,17 +117,30 @@ You are an expert text analyzer. Analyze the provided Harry Potter text and extr
 - For each remark, provide a brief description of what was said (1-2 sentences maximum).
 - Output strictly as JSON.
 - Keep the descriptions short and concise.
+
+CRITICAL: NEVER use null or empty values:
+- character_name MUST be a non-empty string. If the speaker is unclear, use "other".
+- target MUST be a non-empty array with non-empty strings. If the target is unclear, use "other".
     `;
 
     const SENTIMENT_ANALYSIS_SYSTEM_PROMPT = `
-You are an expert Harry Potter sentiment analyzer. You will analyze a batch of remarks/comments from the same paragraph and determine the sentiment of the speaker towards their target.
+You are an expert Harry Potter sentiment analyzer. You will analyze a batch of remarks/comments extract from the same text and determine the sentiment of the speaker towards the provided target in each specifc remark.
 
 For each item in the batch:
-- Analyze the remark to understand what the speaker said or thought about the target
-- Use the overall paragraph context provided at the beginning to better understand the situation, tone, and relationship between characters.
+- Analyze the remark to understand what the speaker said or thought about the target.
+- Use the overall paragraph context provided at the beginning to better understand the situation, and the characters involved.
 - Determine if the sentiment of the speaker towards the target in the specific provided remark is positive, negative, or neutral.
 
-Return your analysis as JSON with an "analyzed_items" array containing the sentiment and reasoning for each item, indexed by the "item_index" provided in the input.`;
+Example:
+input:
+ - speaker: "Albus Dumbledore",
+ - target: "Lord Voldemort",
+ - remark: "The old man tells Mr. Dursley to rejoice because You-Know-Who has gone.",
+
+output: 
+ - sentiment: "negative"
+ - reasoning: "The old man is happy about Lord Voldemort is gone so its sentiment towards Voldemort is negative in this remark."
+`;
 
     const CHARACTER_CONVERSION_SYSTEM_PROMPT = `
 You are a Harry Potter character name converter. Your job is to take character names and convert them to their canonical match from the predefined list.
@@ -177,16 +190,16 @@ ${chunkInfo.chunk_text}
 
 ` : '';
       
-      const bookInfo = chunkInfo ? `Book ${chunkInfo.book}` : '';
+      const bookInfo = chunkInfo ? `book ${chunkInfo.book}` : '';
       
       const remarksData = batchData.map((item, index) => `
 Item index: ${index},
 Speaker: ${item.speaker},
 Target: ${item.target},
-The remark made by ${item.speaker} about ${item.target}: "${item.description}"
+Remark: "${item.description}"
 `).join('\n');
 
-      return `${chunkContext}Analyze the sentiment for each of following remarks from ${bookInfo}:
+      return `${chunkContext}Analyze the sentiment of the speaker towards the target in each of following remarks from ${bookInfo}:
 
 ${remarksData}`;
     }
@@ -466,17 +479,21 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
                                   properties: {
                                       character_name: {
                                           type: "string",
-                                          description: "The character who said the remark.",
+                                          minLength: 1,
+                                          description: "The character who said the remark. MUST be a non-empty string. If unclear, use 'other' or the most likely character.",
                                       },
                                       target: {
                                           type: "array",
+                                          minItems: 1,
                                           items: {
-                                              type: "string"
+                                              type: "string",
+                                              minLength: 1
                                           },
-                                          description: "The character(s) or group(s) or animal(s) or object(s) who were the subject of the remark. could be also someone's family, friends, animals, objects, etc. in that case need to include the owner or the relative in the target.",
+                                          description: "The character(s) or group(s) or animal(s) or object(s) who were the subject of the remark. MUST be a non-empty array with non-empty strings. If unclear, use 'other'.",
                                       },
                                       description: {
                                           type: "string",
+                                          minLength: 1,
                                           description: "A short description of the remark or comment made by the character.",
                                       },
                                   },
@@ -498,6 +515,53 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
 
         try {
           const parsed = JSON.parse(completion.choices[0].message.content);
+          
+          // Validate and fix null values in the extracted remarks
+          if (parsed.remarks && Array.isArray(parsed.remarks)) {
+            let fixedCount = 0;
+            
+            parsed.remarks.forEach((remark, index) => {
+              // Fix null character_name
+              if (!remark.character_name || remark.character_name.trim() === '') {
+                console.warn(`[FIX] Null character_name in Book ${book}, Chunk ${chunkIndex}, Remark ${index}. Setting to 'unknown speaker'.`);
+                remark.character_name = 'otherr';
+                fixedCount++;
+              }
+              
+              // Fix null or empty target
+              if (!remark.target || !Array.isArray(remark.target) || remark.target.length === 0) {
+                console.warn(`[FIX] Null/empty target in Book ${book}, Chunk ${chunkIndex}, Remark ${index}. Setting to ['other'].`);
+                remark.target = ['other'];
+                fixedCount++;
+              } else {
+                // Fix individual null/empty items in target array
+                const originalTargets = [...remark.target];
+                remark.target = remark.target.filter(t => t && t.trim() !== '');
+                
+                // If all targets were filtered out, add 'other'
+                if (remark.target.length === 0) {
+                  console.warn(`[FIX] All targets empty in Book ${book}, Chunk ${chunkIndex}, Remark ${index}. Setting to ['other'].`);
+                  remark.target = ['other'];
+                  fixedCount++;
+                } else if (remark.target.length !== originalTargets.length) {
+                  console.warn(`[FIX] Filtered empty targets in Book ${book}, Chunk ${chunkIndex}, Remark ${index}. Changed from ${originalTargets} to ${remark.target}.`);
+                  fixedCount++;
+                }
+              }
+              
+              // Ensure description is not null
+              if (!remark.description || remark.description.trim() === '') {
+                console.warn(`[FIX] Null description in Book ${book}, Chunk ${chunkIndex}, Remark ${index}. Setting to 'No description'.`);
+                remark.description = 'No description';
+                fixedCount++;
+              }
+            });
+            
+            if (fixedCount > 0) {
+              console.log(`[INFO] Fixed ${fixedCount} null/empty values in Book ${book}, Chunk ${chunkIndex}`);
+            }
+          }
+          
           // Add chunk text to the parsed data
           parsed.chunk_text = chunkText;
           return { success: true, data: parsed, book, chunkIndex };
@@ -567,7 +631,7 @@ For belongings/relatives (e.g., "Harry's owl", "his parents"), include both the 
                           sentiment: {
                             type: "string",
                             enum: ["positive", "negative", "neutral"],
-                            description: "Does the speaker said/though something positive, neutral or negative about the target, in the specific remark"
+                            description: "The sentiment of the speaker towards the target, in the specific provided remark"
                           },
                           reasoning: {
                             type: "string",
