@@ -2,7 +2,7 @@
 
 A complete toolkit for extracting, analyzing, and visualizing character relationships in Harry Potter through dialogue analysis and sentiment visualization.
 
-![demo](graph-demo.gif)
+![demo](demo-graph.gif)
 
 ## What This Project Does
 
